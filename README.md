@@ -28,13 +28,16 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, dummy interactive key, after the widget moved | token, 3.9s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | mechanism verified end to end; token depends on your image solver — see below |
+| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens, ~1m12s**, with the example solver — see below |
 
 The last row deserves the detail rather than a footnote. When Google decides you are
-worth challenging, it puts up a grid of photographs. Postern will drive that grid — see
-[picture challenges](#picture-challenges) — but only if you give it something that can
-look at pictures. With no solver configured it says so in about nine seconds rather than
-burning the timeout.
+worth challenging, it puts up a grid of photographs. Postern drives that grid — finds it,
+measures it, answers it in as many rounds as it takes, and submits — but the looking is
+delegated to a command you nominate. The 3/5 above is with `examples/solver-yolos.py`, a
+small COCO model; both failures were categories COCO has no word for, and postern said so
+rather than timing out. A better model is a better number, and swapping it is one flag.
+With no solver configured at all, it reports the challenge in about nine seconds rather
+than burning the timeout.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
@@ -132,33 +135,32 @@ the picture alone — postern still clicks whatever comes back.
 `examples/solver-template.py` is the starting point, and `examples/solver-yolos.py` is a
 working one built on YOLOS-tiny.
 
-**What has been verified, and what has not.** The mechanism is confirmed end to end
-against live challenges, with a human-in-the-loop solver for the seeing:
+**What was hard about this.** Two of the three failures were silent — the challenge looked
+answered and simply was not — and both are worth knowing about if you are building
+something similar.
 
-- the panel is found and measured on both same-origin and cross-origin frames
-- the prompt, the grid and the buttons are read from the challenge document
-- clicks land where they are meant to — reCAPTCHA accepted the picks and replaced the
-  tiles, which is what it does for a correct answer in a dynamic grid
-- the submission registers, and the panel's verdict comes back and is read
+*The verify button is often not where the browser says it is.* reCAPTCHA lays its panel
+out taller than the space it gives it, and the buttons end up below a container that clips
+them: `getBoundingClientRect` returns a perfectly plausible rectangle, nothing is painted
+there, and the click lands on the page behind. A challenge answered correctly then sits
+untouched, ticks and all — indistinguishable from a wrong answer. Postern asks the document
+what is *actually* at that point, and falls back to focusing the button and pressing Enter.
+Widening the frame does not help; the clipping is inside the document.
+`TestVerifyReachesTheButton` fails if a submission stops registering.
 
-That last point took the longest and is worth the warning, because it fails silently.
-reCAPTCHA lays its panel out taller than the space it gives it, and the buttons end up
-below a container that clips them: `getBoundingClientRect` returns a rectangle, nothing
-is painted there, and the click lands on the page behind. A challenge answered perfectly
-then sits untouched, which looks exactly like a wrong answer. Postern asks the document
-what is actually at that point, and falls back to focusing the button and pressing Enter.
-`TestVerifyReachesTheButton` covers it.
+*The challenge frame lives in another process.* Everywhere except Google's own demo, the
+panel is a cross-site iframe, which Chrome runs on its own and which is invisible to the
+page's session — it shows up as an empty `about:blank` in the frame tree. It has to be
+reached as a separate target instead. Worse, chromedp tears such an attachment down by
+closing the target, and closing a frame's target closes the page holding it: postern was
+shutting its own tab, on every site but the demo. The attachment is now made once and kept
+for the life of the tab.
 
-What none of this produced is a token, and the reason is the model rather than the
-plumbing. YOLOS-tiny answers COCO's classes — buses, cars, bicycles, hydrants, traffic
-lights — and reCAPTCHA asks about crosswalks, stairs and chimneys too, on 100-pixel
-photographs it has deliberately degraded. On the runs logged here it found the right
-tiles when it knew the class and nothing at all when it did not, and reCAPTCHA said so:
-*"Veuillez également vérifier les nouvelles images."* Answering by hand got every pick
-accepted and still no token inside the time a person needs per round.
-
-So: the plumbing works, and the seeing is yours to supply. Run with `-v` to see which
-prompt came up, what your solver made of it, and what the panel objected to.
+*What is left is the model.* Postern answers the challenge; something has to recognise a
+bicycle in a deliberately degraded 100-pixel photograph. The example solver knows COCO's
+classes and passes on the rest, which is exactly why the protocol has an "ask me a
+different one" exit code. Run with `-v` to see which prompt came up, what your solver made
+of it, and what the panel objected to.
 
 ## Requirements
 
