@@ -57,7 +57,14 @@ the checkbox lives in a cross-origin iframe nothing on the page can reach into. 
 clicks it from the outside: pointer events dispatched over CDP, so the page sees
 `isTrusted`, following a curved path with easing and jitter rather than teleporting onto
 the target. The click only fires once the widget has had a few seconds to solve itself —
-most challenges never need it.
+most challenges never need it — and is retried up to three times, eight seconds apart,
+because a click that lands while Cloudflare is still thinking is a click wasted.
+
+The click aims at Cloudflare's own iframe when it is present, and at our container
+otherwise, so it follows the widget if its size or position ever changes. The token is
+read from the callback and, failing that, from the hidden `cf-turnstile-response` field
+next to the widget: a widget that fills the field without firing the callback would
+otherwise be indistinguishable from one that solved nothing.
 
 The pleasant consequence is that there is very little left to patch. `internal/patches/`
 is nearly empty on purpose — a clumsy override is a stronger fingerprint than whatever it
@@ -171,11 +178,16 @@ curl -s https://challenges.cloudflare.com/turnstile/v0/siteverify \
 A green `"success": true` here means the whole chain works — browser, widget, callback,
 and a token Cloudflare's own endpoint accepts.
 
-There is also an integration test that launches a browser and checks what the page can
-see. It needs Chrome, so `go test -short ./...` skips it:
+Be aware of what the dummy keys do **not** exercise: they return a fixed
+`XXXX.DUMMY.TOKEN.XXXX` with no risk analysis behind it — no fingerprint scoring, no
+behavioural checks — and they render no iframe, only the container and the hidden field.
+They prove the plumbing works. They say nothing about a production sitekey.
+
+There are also integration tests that launch a browser and check what a page can see.
+They need Chrome, so `go test -short ./...` skips them:
 
 ```sh
-go test ./internal/browser/ -run TestHeadlessFingerprint -v
+go test ./internal/... -v
 ```
 
 Rough timings against the dummy keys, headless, warm profile:
