@@ -47,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 type solveRequest struct {
 	URL       string `json:"url"`
 	SiteKey   string `json:"sitekey"`
+	Kind      string `json:"kind,omitempty"`
 	Action    string `json:"action,omitempty"`
 	CData     string `json:"cdata,omitempty"`
 	TimeoutMS int    `json:"timeout_ms,omitempty"`
@@ -82,6 +83,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := solver.Solve(r.Context(), s.browser, solver.Request{
+		Kind:    solver.Kind(req.Kind),
 		URL:     req.URL,
 		SiteKey: req.SiteKey,
 		Action:  req.Action,

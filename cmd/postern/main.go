@@ -1,4 +1,4 @@
-// Command postern solves Cloudflare Turnstile challenges with a real browser.
+// Command postern solves Turnstile and reCAPTCHA challenges with a real browser.
 //
 //	postern serve                       # local HTTP API
 //	postern solve -url ... -sitekey ...  # one shot, token on stdout
@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,11 +24,11 @@ import (
 	"github.com/mikketa/postern/internal/solver"
 )
 
-const usage = `postern - Cloudflare Turnstile solver driving a real Chrome
+const usage = `postern - captcha solver driving a real Chrome
 
 usage:
   postern serve [flags]
-  postern solve -url <page> -sitekey <key> [flags]
+  postern solve -url <page> -sitekey <key> [-kind <kind>] [flags]
 
 run "postern <command> -h" for the flags of a command.
 `
@@ -164,8 +165,10 @@ func runSolve(args []string) error {
 	fs := flag.NewFlagSet("solve", flag.ExitOnError)
 	opts, screen, mode := browserFlags(fs)
 	url := fs.String("url", "", "page the widget belongs to (required)")
-	sitekey := fs.String("sitekey", "", "Turnstile sitekey (required)")
-	action := fs.String("action", "", "Turnstile action parameter, if the site sets one")
+	sitekey := fs.String("sitekey", "", "sitekey, as found in the target page (required)")
+	kind := fs.String("kind", string(solver.Turnstile),
+		"challenge kind: "+strings.Join(solver.Kinds(), ", "))
+	action := fs.String("action", "", "action parameter, if the site sets one")
 	cdata := fs.String("cdata", "", "Turnstile cData parameter, if the site sets one")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
 	if err := fs.Parse(args); err != nil {
@@ -188,6 +191,7 @@ func runSolve(args []string) error {
 	defer closeBrowser()
 
 	result, err := solver.Solve(ctx, b, solver.Request{
+		Kind:    solver.Kind(*kind),
 		URL:     *url,
 		SiteKey: *sitekey,
 		Action:  *action,
