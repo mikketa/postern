@@ -101,6 +101,15 @@ const (
 	// this solver and this challenge are not going to agree.
 	maxPasses = 3
 
+	// maxStuckReloads is how many times to press the reload button and be given
+	// the same grid back before accepting that the panel is not going to change
+	// its mind. Two, because the first refusal is worth a second try and the
+	// third is a loop: a run measured seventeen identical rounds — the same
+	// picture, the same score to two decimal places — before the timeout ended
+	// it. Failing in twenty seconds with a reason beats failing in two minutes
+	// without one.
+	maxStuckReloads = 2
+
 	// buttonWait is how long to wait for the button to come back to life, and
 	// buttonAttempts how many times.
 	buttonWaitMin  = 300
@@ -144,6 +153,28 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 	}
 
 	passes := 0
+	stuck := 0
+
+	// fresh presses the reload button and insists on getting somewhere. A panel
+	// that keeps handing back the same grid is not going to be talked round,
+	// and every attempt costs a round trip to the solver.
+	fresh := func(before []string) error {
+		changed, err := reload(ctx, frame, before)
+		if err != nil {
+			return err
+		}
+		if changed {
+			stuck = 0
+			return nil
+		}
+		stuck++
+		if stuck >= maxStuckReloads {
+			return fmt.Errorf("challenge: asked %d times for a grid other than %q and got "+
+				"the same one back, which the solver has nothing for", stuck, frame.View.Prompt)
+		}
+		log.Info("the panel kept the same grid", "attempts", stuck)
+		return nil
+	}
 
 	for round := 0; round < maxRounds; round++ {
 		// The panel closes the moment the challenge is over, either because it
@@ -180,7 +211,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			}
 
 			log.Info("solver passed, asking for another challenge", "passes", passes)
-			if reloadErr := reload(ctx, frame, before); reloadErr != nil {
+			if reloadErr := fresh(before); reloadErr != nil {
 				return reloadErr
 			}
 			continue
@@ -243,7 +274,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		if clicked == 0 && frame.View.Notice != "" {
 			log.Info("nothing new on a grid already refused, asking for another",
 				"notice", frame.View.Notice, "named", len(points))
-			if err := reload(ctx, frame, before); err != nil {
+			if err := fresh(before); err != nil {
 				return err
 			}
 			continue
@@ -322,23 +353,26 @@ func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, erro
 // said it cannot answer this one. The panel has a button for exactly this, and
 // pressing it is what a person does when handed a puzzle in a language they do
 // not read.
-func reload(ctx context.Context, frame *Frame, before []string) error {
+//
+// It reports whether a different grid actually arrived. reCAPTCHA is under no
+// obligation to produce one, and pressing the button at a panel that has
+// decided to keep this grid is a loop with no exit: measured at seventeen
+// identical rounds — the same picture, the same score to two decimal places —
+// burning a two-minute budget that had nowhere to go.
+func reload(ctx context.Context, frame *Frame, before []string) (bool, error) {
 	if frame.View.Reload == nil {
-		return fmt.Errorf("challenge: solver passed on %q and the panel offers no other",
+		return false, fmt.Errorf("challenge: solver passed on %q and the panel offers no other",
 			frame.View.Prompt)
 	}
 
 	x, y := frame.View.Reload.Center()
 	if err := click(ctx, frame, x, y); err != nil {
-		return fmt.Errorf("challenge: reload: %w", err)
+		return false, fmt.Errorf("challenge: reload: %w", err)
 	}
 
 	// Wait for a genuinely different grid rather than photographing the old one
 	// again, which would pass right back to the solver and stall the round.
-	if _, err := await(ctx, frame, before, replaceAttempts); err != nil {
-		return err
-	}
-	return nil
+	return await(ctx, frame, before, replaceAttempts)
 }
 
 // await waits for the panel to become something other than what it was: a
