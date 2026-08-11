@@ -81,6 +81,9 @@ const readScript = `(() => {
     button: verify ? {
       ...rect(verify),
       label: verify.innerText.trim(),
+      // reCAPTCHA disables the button while it thinks about the last answer.
+      // A disabled button takes neither a click nor the keyboard.
+      disabled: !!verify.disabled,
       // Whether a click would actually land on it. Geometry alone says yes for
       // a button reCAPTCHA has laid out below a container that clips it: the
       // rectangle is real, the pixels are not, and the click goes to whatever
@@ -160,8 +163,10 @@ type Box struct {
 	// postern knows the round is not over.
 	Src string `json:"src"`
 
-	// Hittable reports that a click at this box's centre would reach it.
+	// Hittable reports that a click at this box's centre would reach it, and
+	// Disabled that nothing would happen if it did.
 	Hittable bool `json:"hittable"`
+	Disabled bool `json:"disabled"`
 }
 
 // Center is the middle of the box.
@@ -408,7 +413,9 @@ func (f *Finder) findAttached(ctx context.Context) (*Frame, error) {
 		if err != nil {
 			// The world goes stale when the frame navigates, which it does
 			// between challenges. Drop it and let the next poll make another.
-			delete(f.attached, info.TargetID)
+			if stale(err) {
+				delete(f.attached, info.TargetID)
+			}
 			continue
 		}
 		if len(view.Tiles) == 0 || view.Height < minPanelHeight {
@@ -526,6 +533,13 @@ func (f *Frame) Reread(ctx context.Context) error {
 		view, err = readWorld(fctx, f.world)
 		return err
 	}))
+	if stale(err) {
+		// The frame navigated away, taking the world with it — which is what
+		// happens when reCAPTCHA is finished with this panel. Not a failure:
+		// an empty view reads as a closed panel, and the caller stops.
+		f.View = View{}
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("challenge: reread panel: %w", err)
 	}
@@ -541,6 +555,13 @@ func (f *Frame) Reread(ctx context.Context) error {
 	}
 	f.OriginX, f.OriginY = x, y
 	return nil
+}
+
+// stale reports that an isolated world has gone, because the frame holding it
+// navigated. Chrome says so in words rather than in a code of its own, so this
+// matches on the message; a wrong guess costs one abandoned panel, not the run.
+func stale(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Cannot find context")
 }
 
 // challengeFrames returns the candidate challenge frames in a tree.

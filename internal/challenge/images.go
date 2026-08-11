@@ -101,6 +101,12 @@ const (
 	// this solver and this challenge are not going to agree.
 	maxPasses = 3
 
+	// buttonWait is how long to wait for the button to come back to life, and
+	// buttonAttempts how many times.
+	buttonWaitMin  = 300
+	buttonWaitMax  = 500
+	buttonAttempts = 6
+
 	// pointerAttempts is how long to wait for a pointer submission to register
 	// before falling back to the keyboard.
 	pointerAttempts = 3
@@ -378,8 +384,13 @@ func Verify(ctx context.Context, frame *Frame, log *slog.Logger) error {
 		return nil
 	}
 
+	if err := buttonReady(ctx, frame); err != nil {
+		return err
+	}
 	if frame.View.Button == nil {
-		return fmt.Errorf("challenge: panel has no verify button")
+		// Nothing to press. The panel is between states rather than broken, and
+		// the caller will find it again on the next poll.
+		return nil
 	}
 
 	if frame.View.Button.Hittable {
@@ -412,13 +423,41 @@ func Verify(ctx context.Context, frame *Frame, log *slog.Logger) error {
 		return err
 	}
 	if !focused {
-		return fmt.Errorf("challenge: verify button is clipped at y=%.0f in a %.0f-tall "+
-			"panel and will not take focus", frame.View.Button.Y, frame.View.Height)
+		// Out of good options: the button will not take the keyboard and the
+		// document says a click would land elsewhere. Click at it anyway —
+		// the reading may simply be stale — rather than abandoning a challenge
+		// that is otherwise answered.
+		log.Debug("verify button will not take focus, clicking at it anyway",
+			"buttonY", frame.View.Button.Y, "panelHeight", frame.View.Height)
+
+		x, y := frame.View.Button.Center()
+		return click(ctx, frame, x, y)
 	}
 
 	log.Debug("verify by keyboard", "label", frame.View.Button.Label,
 		"buttonY", frame.View.Button.Y, "panelHeight", frame.View.Height)
 	return chromedp.Run(ctx, chromedp.ActionFunc(input.PressEnter))
+}
+
+// buttonReady waits for the panel's button to be worth pressing. reCAPTCHA
+// disables it while it considers the previous answer, and a disabled button
+// takes neither a click nor a keystroke.
+func buttonReady(ctx context.Context, frame *Frame) error {
+	for range buttonAttempts {
+		if b := frame.View.Button; b != nil && !b.Disabled {
+			return nil
+		}
+		if err := input.Pause(ctx, buttonWaitMin, buttonWaitMax); err != nil {
+			return err
+		}
+		if err := frame.Reread(ctx); err != nil {
+			return err
+		}
+		if !frame.Open() {
+			return nil
+		}
+	}
+	return nil
 }
 
 // click aims the real pointer at a position inside the challenge document.
