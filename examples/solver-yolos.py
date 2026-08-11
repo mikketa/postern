@@ -44,8 +44,11 @@ GRID_BOTTOM_RATIO = 0.88
 GRID_SIDE_MARGIN = 0.02
 
 # Detection settings. The threshold is deliberately low: a missed tile fails the
-# challenge outright, while a spurious one merely costs another round.
-SCORE_THRESHOLD = 0.30
+# challenge outright, while a spurious one merely costs another round. reCAPTCHA
+# degrades its photographs on purpose — 100 pixels a side, heavy noise — and a
+# model reading them is far less sure of itself than the same model reading a
+# clean picture.
+SCORE_THRESHOLD = 0.15
 MODEL_INPUT = 512
 
 # How much of a square a detection has to cover before that square counts, in

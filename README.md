@@ -25,9 +25,10 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, production sitekey, managed mode | **5/5 tokens, ~3s each** |
 | Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens, 13.7s total**, median 4s |
 | **reCAPTCHA v3** | token, ~4s |
+| **Turnstile**, dummy interactive key, after the widget moved | token, 3.9s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | needs an image solver — see below |
+| **reCAPTCHA v2 checkbox**, image challenge served | mechanism verified end to end; token depends on your image solver — see below |
 
 The last row deserves the detail rather than a footnote. When Google decides you are
 worth challenging, it puts up a grid of photographs. Postern will drive that grid — see
@@ -104,24 +105,60 @@ The protocol is deliberately dumb — a solver is a twenty-line script:
 | --- | --- |
 | **argv** | the path to a PNG of the challenge panel, prompt included |
 | **stdout** | one `x,y` per line, in pixels within that image; nothing means nothing to click |
-| **exit** | non-zero means "could not solve" |
+| **exit 0** | answered |
+| **exit 2** | cannot answer this one — postern asks for a different challenge |
+| **other** | a failure, which ends the solve |
 
-Coordinates rather than tile indices, because the panel is not one fixed size — it came
-out 300x480 for one challenge type and 400x580 for another — and it is a cross-origin
-iframe nothing can measure from the inside. Whatever is looking at the picture can see
-the layout; postern should not have to guess it.
+The difference between exit 0 with no coordinates and exit 2 is the difference between
+"none of these are buses" and "I do not know what a crosswalk looks like". The first is
+an answer worth submitting; the second is a guess that will be marked wrong. Saying so
+gets you another grid instead, which is how a model that knows ten kinds of thing still
+gets through a challenge that asks about twenty.
 
-`examples/solver-template.py` is the starting point.
+Postern passes what it already knows through the environment, so a solver does not have
+to work it out from the picture:
 
-**What has been verified, and what has not.** Driving a live challenge with a
-human-in-the-loop solver confirmed the mechanism end to end: the panel is found, captured
-and passed on, and the clicks land where they are meant to — reCAPTCHA accepted the
-selected tiles and replaced them, which is what it does for a correct pick in a dynamic
-grid. What that run did *not* produce is a token, because a human answering through a
-file takes half a minute per round and reCAPTCHA expires the validation long before that.
-Whether a real solver gets you a token therefore depends on the model you plug in and on
-how fast it answers — aim for a couple of seconds. The plumbing works; the seeing is
-yours to supply.
+| | |
+| --- | --- |
+| `POSTERN_PROMPT` | the instruction, as text |
+| `POSTERN_COLUMNS` | 3 or 4, the width of the grid |
+| `POSTERN_TILES` | `x,y,w,h;...` one per tile, in image pixels |
+
+These are read out of the challenge document itself over CDP, not inferred from the
+screenshot. It is the difference between OCR-ing a prompt and being told it, and between
+counting tiles and being handed their rectangles. A solver may ignore all three and read
+the picture alone — postern still clicks whatever comes back.
+
+`examples/solver-template.py` is the starting point, and `examples/solver-yolos.py` is a
+working one built on YOLOS-tiny.
+
+**What has been verified, and what has not.** The mechanism is confirmed end to end
+against live challenges, with a human-in-the-loop solver for the seeing:
+
+- the panel is found and measured on both same-origin and cross-origin frames
+- the prompt, the grid and the buttons are read from the challenge document
+- clicks land where they are meant to — reCAPTCHA accepted the picks and replaced the
+  tiles, which is what it does for a correct answer in a dynamic grid
+- the submission registers, and the panel's verdict comes back and is read
+
+That last point took the longest and is worth the warning, because it fails silently.
+reCAPTCHA lays its panel out taller than the space it gives it, and the buttons end up
+below a container that clips them: `getBoundingClientRect` returns a rectangle, nothing
+is painted there, and the click lands on the page behind. A challenge answered perfectly
+then sits untouched, which looks exactly like a wrong answer. Postern asks the document
+what is actually at that point, and falls back to focusing the button and pressing Enter.
+`TestVerifyReachesTheButton` covers it.
+
+What none of this produced is a token, and the reason is the model rather than the
+plumbing. YOLOS-tiny answers COCO's classes — buses, cars, bicycles, hydrants, traffic
+lights — and reCAPTCHA asks about crosswalks, stairs and chimneys too, on 100-pixel
+photographs it has deliberately degraded. On the runs logged here it found the right
+tiles when it knew the class and nothing at all when it did not, and reCAPTCHA said so:
+*"Veuillez également vérifier les nouvelles images."* Answering by hand got every pick
+accepted and still no token inside the time a person needs per round.
+
+So: the plumbing works, and the seeing is yours to supply. Run with `-v` to see which
+prompt came up, what your solver made of it, and what the panel objected to.
 
 ## Requirements
 

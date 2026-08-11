@@ -167,7 +167,8 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				continue
 			}
 			if s.Error != "" {
-				return nil, fmt.Errorf("solver: %s error %s", req.kindOrDefault(), s.Error)
+				return nil, fmt.Errorf("solver: %s error %s%s",
+					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
 			}
 			if s.Token != "" {
 				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
@@ -221,6 +222,18 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			}
 		}
 	}
+}
+
+// hint adds what a bare error code does not say. These cost nothing to carry
+// and save the reader an hour: the code below sent this author looking for a
+// content security policy for twenty minutes, when the real answer was that
+// api.js refuses to serve a v3 loader for a v2 key.
+func hint(kind Kind, code string) string {
+	if kind == RecaptchaV3 && code == "api-script-blocked" {
+		return " — reCAPTCHA refuses api.js?render= for a key that is not a v3 key, " +
+			"so check that the sitekey is really a v3 one"
+	}
+	return ""
 }
 
 // kindOrDefault names the challenge for error messages.
