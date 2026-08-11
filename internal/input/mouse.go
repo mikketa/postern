@@ -145,3 +145,30 @@ func Pause(ctx context.Context, minMS, maxMS int) error {
 		return ctx.Err()
 	}
 }
+
+// PressEnter sends an Enter keystroke to whatever currently has focus.
+//
+// It is the way in when the pointer cannot get there: reCAPTCHA lays its panel
+// out taller than the frame it is given, so the buttons underneath are never
+// painted and no coordinate on screen lands on them. A focused button still
+// answers the keyboard.
+func PressEnter(ctx context.Context) error {
+	for _, kind := range []input.KeyType{input.KeyRawDown, input.KeyChar, input.KeyUp} {
+		ev := input.DispatchKeyEvent(kind).
+			WithKey("Enter").
+			WithCode("Enter").
+			WithWindowsVirtualKeyCode(13).
+			WithNativeVirtualKeyCode(13)
+
+		if kind == input.KeyChar {
+			ev = ev.WithText("\r")
+		}
+		if err := ev.Do(ctx); err != nil {
+			return err
+		}
+		if err := Pause(ctx, 20, 60); err != nil {
+			return err
+		}
+	}
+	return nil
+}
