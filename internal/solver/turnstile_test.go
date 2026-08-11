@@ -36,7 +36,7 @@ func TestStateScriptReadsHiddenField(t *testing.T) {
 	if err := chromedp.Run(tabCtx,
 		chromedp.Navigate("about:blank"),
 		chromedp.Evaluate(plant, &planted),
-		chromedp.Evaluate(stateScript, &s),
+		chromedp.Evaluate(stateScript("cf-turnstile-response"), &s),
 	); err != nil {
 		t.Fatalf("evaluate: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestClickTargetIsResolvable(t *testing.T) {
 	tabCtx, done := newTab(t)
 	defer done()
 
-	bootstrap, err := renderScript(Request{URL: "https://example.com", SiteKey: interactiveKey})
+	bootstrap, err := turnstileBootstrap(Request{URL: "https://example.com", SiteKey: interactiveKey})
 	if err != nil {
 		t.Fatalf("render script: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestClickTargetIsResolvable(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		var box *rect
-		if err := chromedp.Run(tabCtx, chromedp.Evaluate(rectScript, &box)); err != nil || box == nil || box.W == 0 {
+		if err := chromedp.Run(tabCtx, chromedp.Evaluate(rectScript("challenges.cloudflare.com"), &box)); err != nil || box == nil || box.W == 0 {
 			time.Sleep(300 * time.Millisecond)
 			continue
 		}
