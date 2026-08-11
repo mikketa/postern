@@ -1,6 +1,6 @@
 # build output
 /postern
-/postern[A-Z]
+/postern-*
 /dist/
 
 # local Chrome profile, if someone points -profile at the repo

@@ -114,6 +114,9 @@ const (
 
 	// passExitCode is how a solver says it cannot answer this challenge.
 	passExitCode = 2
+
+	// solverErrLines is how much of a failing solver's output to quote back.
+	solverErrLines = 3
 )
 
 // errPass is that refusal, travelling back up to the round loop.
@@ -182,7 +185,33 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		}
 		log.Info("solver answered", "tiles", len(points))
 
+		// An empty answer is an answer, not a failure: reCAPTCHA's own
+		// instructions say to press the button when none of the pictures match,
+		// and a dynamic grid ends exactly that way.
+		//
+		// Unless the panel has already complained about this grid. Submitting
+		// nothing to a challenge that just said "check the new images too" is
+		// resubmitting the answer it has already refused, and the round after
+		// that is the same one again. Ask for a different grid instead.
+		if len(points) == 0 && frame.View.Notice != "" {
+			log.Info("nothing found on a grid already refused, asking for another",
+				"notice", frame.View.Notice)
+			if err := reload(ctx, frame, before); err != nil {
+				return err
+			}
+			continue
+		}
+
 		for _, p := range points {
+			// A solver is somebody else's script, and a click outside the panel
+			// lands on the target page — on a link, say, which navigates away
+			// and takes the widget with it. Coordinates given in tile indices
+			// rather than pixels are the usual way to end up here.
+			if p.X < 0 || p.Y < 0 || p.X > frame.View.Width || p.Y > frame.View.Height {
+				return fmt.Errorf("challenge: solver returned %.0f,%.0f, outside the "+
+					"%.0fx%.0f panel it was given", p.X, p.Y, frame.View.Width, frame.View.Height)
+			}
+
 			if err := click(ctx, frame, p.X, p.Y); err != nil {
 				return fmt.Errorf("challenge: click tile: %w", err)
 			}
@@ -371,9 +400,14 @@ func Verify(ctx context.Context, frame *Frame, log *slog.Logger) error {
 			return err
 		}
 		log.Debug("pointer click was swallowed, trying the keyboard")
+
+		// await re-read the panel, so the button measured above may be gone.
+		if frame.View.Button == nil {
+			return nil
+		}
 	}
 
-	focused, err := frame.Focus(ctx, verifySelector)
+	focused, err := frame.Focus(verifySelector)
 	if err != nil {
 		return err
 	}
@@ -404,15 +438,37 @@ func click(ctx context.Context, frame *Frame, x, y float64) error {
 
 // capture screenshots just the panel, so the solver sees the prompt and the
 // grid and nothing else.
+//
+// The clip is in page coordinates while everything else here is in viewport
+// coordinates, so the scroll has to be added back. Nothing scrolls in the usual
+// case — the widget is position:fixed — but a target page opened at an anchor,
+// or one that restores its scroll, would otherwise hand the solver a picture of
+// somewhere else entirely while the clicks went to the right place. A blank
+// screenshot and a model that finds nothing look identical from here.
 func capture(ctx context.Context, frame *Frame) ([]byte, error) {
 	x, y, w, h := frame.Viewport()
+
+	var scroll struct {
+		X float64 `json:"x"`
+		Y float64 `json:"y"`
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(
+		`({ x: window.scrollX, y: window.scrollY })`, &scroll)); err != nil {
+		return nil, fmt.Errorf("challenge: read scroll: %w", err)
+	}
 
 	var shot []byte
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		shot, err = page.CaptureScreenshot().
 			WithFormat(page.CaptureScreenshotFormatPng).
-			WithClip(&page.Viewport{X: x, Y: y, Width: w, Height: h, Scale: 1}).
+			WithClip(&page.Viewport{
+				X:      x + scroll.X,
+				Y:      y + scroll.Y,
+				Width:  w,
+				Height: h,
+				Scale:  1,
+			}).
 			Do(ctx)
 		return err
 	}))
@@ -451,6 +507,9 @@ func ask(ctx context.Context, solverCmd, imagePath string, view View) ([]point, 
 	// with spaces in it should be wrapped in a shell script rather than fought
 	// with quoting rules here.
 	fields := strings.Fields(solverCmd)
+	if len(fields) == 0 {
+		return nil, fmt.Errorf("challenge: the image solver command is blank")
+	}
 	args := append(fields[1:], imagePath)
 
 	cmd := exec.CommandContext(runCtx, fields[0], args...)
@@ -463,8 +522,15 @@ func ask(ctx context.Context, solverCmd, imagePath string, view View) ([]point, 
 	out, err := cmd.Output()
 	if err != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() == passExitCode {
-			return nil, errPass
+		if errors.As(err, &exit) {
+			if exit.ExitCode() == passExitCode {
+				return nil, errPass
+			}
+			// Whatever it printed is the only diagnosis its author gets.
+			if said := lastLines(exit.Stderr, solverErrLines); said != "" {
+				return nil, fmt.Errorf("challenge: solver %q failed: %w: %s",
+					fields[0], err, said)
+			}
 		}
 		return nil, fmt.Errorf("challenge: solver %q failed: %w", fields[0], err)
 	}
@@ -493,6 +559,15 @@ func ask(ctx context.Context, solverCmd, imagePath string, view View) ([]point, 
 		points = append(points, point{X: px, Y: py})
 	}
 	return points, scanner.Err()
+}
+
+// lastLines returns the tail of what the solver said, for the error message.
+func lastLines(out []byte, n int) string {
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.TrimSpace(strings.Join(lines, "; "))
 }
 
 // encodeTiles renders the grid for the solver's environment.

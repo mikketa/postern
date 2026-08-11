@@ -128,3 +128,32 @@ func TestColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestAskRejectsABlankCommand(t *testing.T) {
+	// "-image-solver $SOLVER" with the variable unset used to panic on
+	// fields[1:] rather than say what was wrong.
+	if _, err := ask(context.Background(), "   ", "/tmp/whatever.png", View{}); err == nil {
+		t.Fatal("expected an error for a blank command")
+	}
+}
+
+func TestAskQuotesWhatTheSolverSaid(t *testing.T) {
+	// A non-zero exit ends the solve, so its author gets one chance to be told
+	// why — and it is whatever the solver printed.
+	solver := solverScript(t, `echo "no model at /opt/model.onnx" >&2; exit 1`)
+
+	_, err := ask(context.Background(), solver, "/tmp/whatever.png", View{})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "/opt/model.onnx") {
+		t.Errorf("error %q drops what the solver said", err)
+	}
+}
+
+func TestLastLines(t *testing.T) {
+	got := lastLines([]byte("one\ntwo\nthree\nfour\n"), 2)
+	if got != "three; four" {
+		t.Errorf("lastLines = %q, want %q", got, "three; four")
+	}
+}
