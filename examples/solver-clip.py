@@ -67,32 +67,51 @@ CONFIDENCE = 0.34
 TILE_MARGIN = 0.55
 
 # What reCAPTCHA asks for, in the language it asks. CLIP thinks in English, so
-# the prompt is translated before it is scored. Anything not listed is passed
-# through as written — often enough to work, since CLIP has seen French.
+# the prompt is translated before it is scored. Where one English word is a poor
+# handle on the thing, the alternatives are listed with it — "bridge" alone
+# scores a river crossing seen from the road at 0.23, which is below anything
+# worth clicking, while "an overpass" describes the same photograph well.
+# Anything not listed is passed through as written; CLIP has seen French.
 CATEGORIES = [
-    (r"passages? (pour |pi[ée]tons|clout[ée])|clous|crosswalk|cross ?walk", "crosswalk"),
-    (r"feux? de circulation|feux? tricolores?|traffic light", "traffic light"),
-    (r"bornes? d.incendie|bouches? d.incendie|fire hydrant", "fire hydrant"),
-    (r"v[ée]los|bicyclettes?|bicycle", "bicycle"),
-    (r"motos|motocyclettes?|motorcycle", "motorcycle"),
-    (r"voitures?|automobiles?|\bcars?\b", "car"),
-    (r"autobus|\bbus\b", "bus"),
-    (r"camions?|trucks?", "truck"),
-    (r"bateaux|navires?|boats?", "boat"),
-    (r"parcm[èe]tres?|parking meter", "parking meter"),
-    (r"escaliers?|marches|stairs", "staircase"),
-    (r"chemin[ée]es?|chimney", "chimney"),
-    (r"montagnes?|collines?|mountains?|hills?", "mountain"),
-    (r"ponts?|bridges?", "bridge"),
-    (r"palmiers?|palm tree", "palm tree"),
-    (r"taxis?", "taxi"),
-    (r"tracteurs?|tractor", "tractor"),
-    (r"trains?|locomotives?", "train"),
-    (r"statues?", "statue"),
-    (r"horloges?|clocks?", "clock"),
-    (r"vitrines?|devantures?|storefront", "shop front"),
-    (r"panneaux? de signalisation|street sign", "street sign"),
-    (r"bo[îi]tes? aux lettres|mailbox", "mailbox"),
+    (r"passages? (pour |pi[ée]tons|clout[ée])|clous|crosswalk|cross ?walk",
+     ("crosswalk", "zebra crossing", "a pedestrian crossing painted on the road")),
+    (r"feux? de circulation|feux? tricolores?|traffic light",
+     ("traffic light", "a set of traffic lights on a pole")),
+    (r"bornes? d.incendie|bouches? d.incendie|fire hydrant",
+     ("fire hydrant",)),
+    (r"v[ée]los|bicyclettes?|bicycle", ("bicycle", "a parked bike")),
+    (r"motos|motocyclettes?|motorcycle", ("motorcycle", "a scooter")),
+    (r"voitures?|automobiles?|\bcars?\b", ("car", "a parked car")),
+    (r"autobus|\bbus\b", ("bus", "a city bus")),
+    (r"camions?|trucks?", ("truck", "a lorry")),
+    (r"bateaux|navires?|boats?", ("boat", "a ship on the water")),
+    (r"parcm[èe]tres?|parking meter", ("parking meter",)),
+    (r"escaliers?|marches|stairs",
+     ("staircase", "a flight of stairs", "steps leading up")),
+    (r"chemin[ée]es?|chimney", ("chimney", "a chimney on a roof")),
+    (r"montagnes?|collines?|mountains?|hills?", ("mountain", "a hill on the horizon")),
+    (r"ponts?|bridges?", ("bridge", "an overpass", "a bridge over water")),
+    (r"palmiers?|palm tree", ("palm tree",)),
+    (r"taxis?", ("taxi", "a yellow cab")),
+    (r"tracteurs?|tractor", ("tractor", "farm machinery")),
+    (r"trains?|locomotives?", ("train", "a railway carriage")),
+    (r"statues?", ("statue", "a monument")),
+    (r"horloges?|clocks?", ("clock", "a clock on a tower")),
+    (r"vitrines?|devantures?|storefront", ("shop front", "a store window")),
+    (r"panneaux? de signalisation|street sign", ("street sign", "a road sign")),
+    (r"bo[îi]tes? aux lettres|mailbox", ("mailbox", "a post box")),
+]
+
+# CLIP scores a picture against a sentence, and which sentence matters more than
+# it should: the same photograph reads differently to "a crosswalk" and to "a
+# photo of a crosswalk". The paper's own answer is to score several phrasings
+# and add up what they say, which is what these are. They cost nothing at run
+# time — sentence embeddings are cached on disk.
+TEMPLATES = [
+    "a photo of {}",
+    "a street photo containing {}",
+    "a cropped photo of {}",
+    "a blurry photo of {}",
 ]
 
 # What a tile is when it is not the answer. Scoring against these rather than
@@ -126,8 +145,9 @@ def session(name: str) -> ort.InferenceSession:
     )
 
 
-def subject(prompt: str) -> str:
-    """What the challenge is asking for, in English."""
+def subject(prompt: str) -> tuple[str, ...]:
+    """What the challenge is asking for, in English, in every way it is worth
+    asking."""
     for pattern, english in CATEGORIES:
         if re.search(pattern, prompt, re.IGNORECASE):
             return english
@@ -144,7 +164,19 @@ def subject(prompt: str) -> str:
     )
     if not after:
         raise Pass(f"cannot tell what {prompt!r} is asking for")
-    return after.group(1).strip()
+    return (after.group(1).strip(),)
+
+
+def phrasings(wanted: tuple[str, ...]) -> list[str]:
+    """Every sentence that counts as asking for this."""
+    sentences = []
+    for name in wanted:
+        # A name that already reads as a sentence ("a bridge over water") is
+        # used as it stands; a bare noun gets the articles and the templates.
+        article = "" if name.startswith(("a ", "an ", "the ")) else "a "
+        for template in TEMPLATES:
+            sentences.append(template.format(article + name))
+    return sentences
 
 
 def tiles() -> list[tuple[float, float, float, float]]:
@@ -220,7 +252,7 @@ def solve(image_path: str) -> list[tuple[float, float]]:
         raise Pass("no prompt: run this through postern, not by hand")
 
     wanted = subject(prompt)
-    print(f"prompt: {prompt!r} -> {wanted!r}", file=sys.stderr)
+    print(f"prompt: {prompt!r} -> {wanted[0]!r}", file=sys.stderr)
 
     panel = Image.open(image_path)
     boxes = tiles()
@@ -230,13 +262,20 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     margin = TILE_MARGIN if len(boxes) == 16 else 0.0
     crops = [crop(panel, box, margin) for box in boxes]
 
-    sentences = [f"a photo of a {wanted}"] + BACKGROUNDS
-    texts = embed_texts(sentences)
+    # One vector for the question and one per thing it might be instead. The
+    # question's vector is the average of its phrasings — several ways of asking
+    # cancel out what is peculiar to any one of them, and averaging rather than
+    # scoring each separately keeps this a choice between seven things, which is
+    # what CONFIDENCE is calibrated against.
+    texts = np.stack([
+        normalise(embed_texts(phrasings(wanted)).mean(axis=0)),
+        *embed_texts(BACKGROUNDS),
+    ])
 
     scores = embed_images(session("clip-vision.onnx"), crops) @ texts.T
 
-    # Softmax across the sentences: how much better the answer fits this tile
-    # than any of the things it might otherwise be.
+    # Softmax across those: how much better the answer fits this tile than any
+    # of the things it might otherwise be.
     scaled = np.exp(100.0 * (scores - scores.max(axis=-1, keepdims=True)))
     confidence = (scaled / scaled.sum(axis=-1, keepdims=True))[:, 0]
 
