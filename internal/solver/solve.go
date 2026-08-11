@@ -193,6 +193,12 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					attempts++
 					err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
 					panel.Close()
+					if errors.Is(err, context.DeadlineExceeded) {
+						// Running out of time mid-challenge is the same failure
+						// as running out of time waiting, and reads better said
+						// the same way.
+						return nil, fmt.Errorf("solver: no token after %s", timeout)
+					}
 					if err != nil {
 						return nil, fmt.Errorf("solver: %w", err)
 					}
