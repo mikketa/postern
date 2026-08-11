@@ -6,14 +6,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/chromedp/chromedp"
 	"github.com/mikketa/postern/internal/browser"
+	"github.com/mikketa/postern/internal/input"
 )
 
-// pollInterval is how often we read the token slot back out of the page.
-const pollInterval = 200 * time.Millisecond
+const (
+	// pollInterval is how often we read the token slot back out of the page.
+	pollInterval = 200 * time.Millisecond
+
+	// interactiveAfter is how long we let the widget settle before assuming it
+	// wants a click. Non-interactive challenges resolve well inside this, so
+	// waiting costs nothing and avoids clicking at a widget still laying out.
+	interactiveAfter = 3 * time.Second
+
+	// checkboxOffsetX is the distance from the widget's left edge to the middle
+	// of its checkbox, in CSS pixels. The widget is a fixed-size iframe we
+	// cannot read into, but its internal layout does not move.
+	checkboxOffsetX = 30
+)
 
 // Request describes one challenge to solve.
 type Request struct {
@@ -75,6 +89,8 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	clicked := false
+
 	for {
 		select {
 		case <-tabCtx.Done():
@@ -98,8 +114,59 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			if s.Token != "" {
 				return &Result{Token: s.Token, Elapsed: time.Since(start)}, nil
 			}
+
+			// An interactive challenge sits there until someone ticks the box.
+			// A failed attempt usually means the widget has not been laid out
+			// yet, so leave the flag down and try again on the next tick.
+			if !clicked && time.Since(start) >= interactiveAfter {
+				if err := clickCheckbox(tabCtx); err == nil {
+					clicked = true
+				}
+			}
 		}
 	}
+}
+
+// rect is the widget's box in viewport coordinates.
+type rect struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
+}
+
+// rectScript reads back the host element we placed ourselves. Reading into the
+// widget's iframe is impossible — it is cross-origin — but the host is ours.
+const rectScript = `(() => {
+  const el = document.querySelector('#postern-widget');
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height };
+})()`
+
+// clickCheckbox aims at the widget's checkbox and clicks it like a hand would.
+func clickCheckbox(ctx context.Context) error {
+	var box *rect
+	if err := chromedp.Run(ctx, chromedp.Evaluate(rectScript, &box)); err != nil {
+		return err
+	}
+	if box == nil || box.W == 0 || box.H == 0 {
+		return errors.New("solver: widget not laid out yet")
+	}
+
+	target := input.Point{
+		X: box.X + checkboxOffsetX,
+		Y: box.Y + box.H/2,
+	}
+
+	// Start somewhere below and to the right, so the pointer covers real
+	// ground instead of materialising next to the target.
+	origin := input.Point{
+		X: box.X + box.W + 120 + rand.Float64()*200,
+		Y: box.Y + box.H + 100 + rand.Float64()*180,
+	}
+
+	return chromedp.Run(ctx, input.Click(origin, target))
 }
 
 // renderScript builds the in-page bootstrap: it wipes the document, drops a
@@ -120,7 +187,10 @@ func renderScript(req Request) (string, error) {
 
 	return fmt.Sprintf(`(() => {
   window.__postern = { token: '', error: '' };
-  document.documentElement.innerHTML = '<head></head><body><div id="postern-widget"></div></body>';
+  // Placed at a fixed spot so the checkbox is at a known viewport coordinate,
+  // and away from the edges so it never lands under a scrollbar.
+  document.documentElement.innerHTML =
+    '<head></head><body><div id="postern-widget" style="position:fixed;left:60px;top:90px"></div></body>';
 
   window.__posternRender = () => {
     window.turnstile.render('#postern-widget', Object.assign(%s, {
