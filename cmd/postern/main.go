@@ -29,9 +29,14 @@ const usage = `postern - captcha solver driving a real Chrome
 usage:
   postern serve [flags]
   postern solve -url <page> -sitekey <key> [-kind <kind>] [flags]
+  postern version
 
 run "postern <command> -h" for the flags of a command.
 `
+
+// version is set by the release build. A binary built with "go build" says so
+// rather than claiming a version nobody tagged.
+var version = "devel"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -45,6 +50,9 @@ func main() {
 		err = runServe(os.Args[2:])
 	case "solve":
 		err = runSolve(os.Args[2:])
+	case "version", "-version", "--version":
+		fmt.Println("postern", version)
+		return
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

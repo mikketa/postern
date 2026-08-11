@@ -1,0 +1,107 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that can be checked without a browser. This is the gate: it runs
+  # on every push, finishes in under a minute, and never touches the network.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - run: go build ./...
+
+      # -short skips every test that launches Chrome or talks to a vendor.
+      # -race because postern serves concurrent requests and the tab plumbing
+      # is where a data race would hide.
+      - run: go test -race -short ./...
+
+  # The tests that drive a real browser: the display, the widget, the panel
+  # reader. They need Chrome and a virtual display, and they talk to the
+  # vendors' own demo endpoints — so they are allowed to fail without failing
+  # the build. A challenge that is not served this run is not a regression.
+  browser:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # postern starts its own Xvfb rather than relying on a display being
+      # exported, so the binary has to be on PATH. Chrome ships with the
+      # runner image already.
+      - name: install xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: report what we are driving
+        run: |
+          google-chrome --version
+          Xvfb -version 2>&1 | head -1
+
+      - run: go test -timeout 20m ./...
+
+  # Release binaries, built only for a tag. Cross-compiled from one runner:
+  # postern drives an external Chrome and links nothing, so CGO stays off and
+  # every target comes out of the same job.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          version=${GITHUB_REF_NAME}
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            name=postern-$version-$os-$arch
+            [ "$os" = windows ] && ext=.exe || ext=
+            GOOS=$os GOARCH=$arch go build \
+              -trimpath -ldflags "-s -w -X main.version=$version" \
+              -o "dist/$name$ext" ./cmd/postern
+            (cd dist && sha256sum "$name$ext" >> checksums.txt)
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
