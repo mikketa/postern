@@ -57,23 +57,38 @@ func main() {
 	}
 }
 
-// browserFlags registers the flags every command shares.
-func browserFlags(fs *flag.FlagSet) *browser.Options {
+// browserFlags registers the flags every command shares. The window size is
+// returned unparsed, since flag parsing has not run yet when this is called.
+func browserFlags(fs *flag.FlagSet) (*browser.Options, *string) {
 	opts := &browser.Options{}
 	fs.StringVar(&opts.UserDataDir, "profile", defaultProfileDir(), "Chrome profile directory, kept across runs")
-	fs.BoolVar(&opts.Headless, "headless", false, "run without a window (more detectable)")
+	fs.BoolVar(&opts.Headless, "headless", true, "run without a window (-headless=false for a windowed browser)")
+	window := fs.String("window", "1920x1080", "browser window size, WxH")
 	fs.StringVar(&opts.ExecPath, "chrome", "", "path to the Chrome binary (default: autodetect)")
 	fs.StringVar(&opts.Proxy, "proxy", "", "proxy passed to Chrome, e.g. http://user:pass@host:port")
-	return opts
+	return opts, window
+}
+
+// applyWindow parses a WxH string into the options.
+func applyWindow(opts *browser.Options, window string) error {
+	var w, h int
+	if _, err := fmt.Sscanf(window, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+		return fmt.Errorf("invalid -window %q, expected something like 1920x1080", window)
+	}
+	opts.ScreenWidth, opts.ScreenHeight = w, h
+	return nil
 }
 
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	opts := browserFlags(fs)
+	opts, window := browserFlags(fs)
 	addr := fs.String("addr", "127.0.0.1:8099", "address to listen on")
 	timeout := fs.Duration("timeout", 60*time.Second, "default per-solve timeout")
 	concurrency := fs.Int("concurrency", 2, "solves running at the same time")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := applyWindow(opts, *window); err != nil {
 		return err
 	}
 
@@ -114,7 +129,7 @@ func runServe(args []string) error {
 
 func runSolve(args []string) error {
 	fs := flag.NewFlagSet("solve", flag.ExitOnError)
-	opts := browserFlags(fs)
+	opts, window := browserFlags(fs)
 	url := fs.String("url", "", "page the widget belongs to (required)")
 	sitekey := fs.String("sitekey", "", "Turnstile sitekey (required)")
 	action := fs.String("action", "", "Turnstile action parameter, if the site sets one")
@@ -125,6 +140,9 @@ func runSolve(args []string) error {
 	}
 	if *url == "" || *sitekey == "" {
 		return errors.New("-url and -sitekey are required")
+	}
+	if err := applyWindow(opts, *window); err != nil {
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
