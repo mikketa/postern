@@ -20,8 +20,10 @@ import (
 	"sync"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/mikketa/postern/internal/patches"
 )
@@ -64,8 +66,14 @@ type Options struct {
 
 // Browser owns a Chrome process and hands out tabs.
 type Browser struct {
-	allocCtx context.Context
-	cancel   context.CancelFunc
+	// browserCtx is the context Chrome itself runs under. Tabs are derived
+	// from it, never from the allocator: a context taken straight off the
+	// allocator starts its own Chrome, which then finds the profile already
+	// locked, hands over to the running instance and exits — leaving the
+	// caller with a browser that died on arrival.
+	browserCtx    context.Context
+	browserCancel context.CancelFunc
+	allocCancel   context.CancelFunc
 
 	// width and height are the screen size, remembered so every tab gets a
 	// window sized from it, not just the one Chrome opens at startup.
@@ -121,12 +129,24 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 		flags = append(flags, chromedp.Env(opts.Env...))
 	}
 
-	allocCtx, cancel := chromedp.NewExecAllocator(ctx, flags...)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, flags...)
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+
+	// Start Chrome here rather than on the first solve: a bad binary, a locked
+	// profile or a missing display should be reported by Launch, not surface
+	// later as a failed request.
+	if err := chromedp.Run(browserCtx); err != nil {
+		browserCancel()
+		allocCancel()
+		return nil, fmt.Errorf("browser: start chrome: %w", err)
+	}
+
 	return &Browser{
-		allocCtx: allocCtx,
-		cancel:   cancel,
-		width:    opts.ScreenWidth,
-		height:   opts.ScreenHeight,
+		browserCtx:    browserCtx,
+		browserCancel: browserCancel,
+		allocCancel:   allocCancel,
+		width:         opts.ScreenWidth,
+		height:        opts.ScreenHeight,
 	}, nil
 }
 
@@ -134,16 +154,43 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 // and returns it along with the function that closes it. Callers own the
 // cancel func.
 func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
-	if b.allocCtx == nil {
+	if b.browserCtx == nil {
 		return nil, nil, errors.New("browser: not launched")
 	}
 
-	tabCtx, cancel := chromedp.NewContext(b.allocCtx)
-	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), installPatches()); err != nil {
+	// Each solve gets its own window rather than another tab in a shared one.
+	// Background tabs are not painted, and a widget that never renders never
+	// solves — which showed up as most concurrent requests timing out while
+	// the foreground one sailed through.
+	// Creating a target is a browser-level command, so it has to be addressed
+	// to the browser rather than to some page's session.
+	chrome := chromedp.FromContext(b.browserCtx)
+	if chrome == nil || chrome.Browser == nil {
+		return nil, nil, errors.New("browser: not launched")
+	}
+	browserExec := cdp.WithExecutor(b.browserCtx, chrome.Browser)
+
+	targetID, err := target.CreateTarget("about:blank").WithNewWindow(true).Do(browserExec)
+	if err != nil {
+		return nil, nil, fmt.Errorf("browser: open window: %w", err)
+	}
+
+	tabCtx, cancel := chromedp.NewContext(b.browserCtx, chromedp.WithTargetID(targetID))
+
+	// chromedp does not close a target it was merely attached to, so the
+	// window is ours to clean up.
+	closeTab := func() {
+		// The browser may already be gone, in which case there is nothing left
+		// to close and the error is not interesting.
+		_ = target.CloseTarget(targetID).Do(browserExec)
 		cancel()
+	}
+
+	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), installPatches()); err != nil {
+		closeTab()
 		return nil, nil, fmt.Errorf("browser: open tab: %w", err)
 	}
-	return tabCtx, cancel, nil
+	return tabCtx, closeTab, nil
 }
 
 // sizeWindow resizes the tab's window after the fact.
@@ -178,8 +225,11 @@ func (b *Browser) sizeWindow() chromedp.ActionFunc {
 
 // Close terminates Chrome.
 func (b *Browser) Close() {
-	if b.cancel != nil {
-		b.cancel()
+	if b.browserCancel != nil {
+		b.browserCancel()
+	}
+	if b.allocCancel != nil {
+		b.allocCancel()
 	}
 }
 
