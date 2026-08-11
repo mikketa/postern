@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -53,6 +54,11 @@ const (
 	// mashing the box.
 	clickRetryAfter = 8 * time.Second
 
+	// navigateAttempts and navigateRetryAfter cover a navigation that failed
+	// for a reason having nothing to do with the page.
+	navigateAttempts   = 3
+	navigateRetryAfter = 500 * time.Millisecond
+
 	// maxResets bounds how many times an expired challenge is started over.
 	// Two, because the remaining budget is what really limits this — a reset
 	// costs a fresh checkbox and whatever the widget serves next, and if that
@@ -63,6 +69,11 @@ const (
 // errExpired is reCAPTCHA telling us the challenge outlived its session, which
 // is a thing to start over rather than a thing to report.
 const errExpired = "expired"
+
+// transientNavigation is Chrome swapping its certificate verifier out from
+// under a request. Nothing about the page caused it and nothing about the page
+// fixes it; asking again does.
+const transientNavigation = "ERR_CERT_VERIFIER_CHANGED"
 
 // resetScript clears the widget back to an unticked checkbox. The bootstrap
 // installs the function; a page rendered before it existed says so by being
@@ -150,10 +161,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	defer cancel()
 
 	start := time.Now()
-	if err := chromedp.Run(tabCtx,
-		chromedp.Navigate(req.URL),
-		chromedp.Evaluate(bootstrap, nil),
-	); err != nil {
+	if err := open(tabCtx, req.URL, bootstrap); err != nil {
 		return nil, fmt.Errorf("solver: bootstrap widget: %w", err)
 	}
 
@@ -257,6 +265,42 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				}
 			}
 		}
+	}
+}
+
+// open navigates to the page and installs the widget, retrying a navigation
+// Chrome itself considers worth retrying.
+//
+// ERR_CERT_VERIFIER_CHANGED is Chrome reconfiguring certificate verification
+// underneath a request — it happens on a cold profile, it has nothing to do
+// with the page, and the documented remedy is to ask again. It cost a measured
+// run for no reason at all.
+func open(ctx context.Context, url, bootstrap string) error {
+	var err error
+	for attempt := range navigateAttempts {
+		if attempt > 0 {
+			if err := sleep(ctx, navigateRetryAfter); err != nil {
+				return err
+			}
+		}
+		err = chromedp.Run(ctx,
+			chromedp.Navigate(url),
+			chromedp.Evaluate(bootstrap, nil),
+		)
+		if err == nil || !strings.Contains(err.Error(), transientNavigation) {
+			return err
+		}
+	}
+	return err
+}
+
+// sleep waits, or gives up if the caller has.
+func sleep(ctx context.Context, d time.Duration) error {
+	select {
+	case <-time.After(d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
