@@ -23,13 +23,14 @@ postern                                 Chrome — your profile, automation flag
    │                                      │
    │  1. navigate to the target page ────►│   the origin Cloudflare sees is the real one
    │  2. render our own widget ──────────►│   challenges.cloudflare.com/turnstile/v0/api.js
-   │  3. poll window.__postern ◄──────────│   the widget callback parks the token there
+   │  3. click, if nothing happens ──────►│   trusted pointer events, curved path
+   │  4. poll window.__postern ◄──────────│   the widget callback parks the token there
    │                                      │
    ▼
  token
 ```
 
-Two decisions shape everything else:
+Three decisions shape everything else:
 
 **The browser is genuine.** Not a spoofed user agent, not a patched headless build — the
 real binary, launched with `--disable-blink-features=AutomationControlled` and without
@@ -37,7 +38,15 @@ the automation banner, reusing the same profile every run so it ages like a pers
 
 **The widget is ours.** Postern renders a fresh Turnstile widget with the site's sitekey
 rather than hunting for the one on the page. Sites lay out their forms in a hundred
-different ways; the widget API is identical everywhere.
+different ways; the widget API is identical everywhere. It also means the widget sits at
+coordinates we chose, which is what makes the next part possible.
+
+**The pointer is real.** Interactive challenges wait for a checkbox to be ticked, and
+the checkbox lives in a cross-origin iframe nothing on the page can reach into. Postern
+clicks it from the outside: pointer events dispatched over CDP, so the page sees
+`isTrusted`, following a curved path with easing and jitter rather than teleporting onto
+the target. The click only fires once the widget has had a few seconds to solve itself —
+most challenges never need it.
 
 The pleasant consequence is that there is very little left to patch. `internal/patches/`
 is nearly empty on purpose — a clumsy override is a stronger fingerprint than whatever it
@@ -149,6 +158,14 @@ curl -s https://challenges.cloudflare.com/turnstile/v0/siteverify \
 
 A green `"success": true` here means the whole chain works — browser, widget, callback,
 and a token Cloudflare's own endpoint accepts.
+
+Rough timings against the dummy keys, headless, warm profile:
+
+| Sitekey | Outcome |
+| --- | --- |
+| `1x…AA` | token in ~2s |
+| `3x…FF` | token in ~4s — 3s of that is the deliberate wait before clicking |
+| `2x…AB` | fails fast with Turnstile error `600010`, no waiting for the timeout |
 
 ## Known limits
 
