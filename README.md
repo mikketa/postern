@@ -132,12 +132,35 @@ screenshot. It is the difference between OCR-ing a prompt and being told it, and
 counting tiles and being handed their rectangles. A solver may ignore all three and read
 the picture alone — postern still clicks whatever comes back.
 
-`examples/solver-template.py` is the starting point, and `examples/solver-yolos.py` is a
-working one built on YOLOS-tiny.
+Three examples ship with it:
 
-**What was hard about this.** Two of the three failures were silent — the challenge looked
-answered and simply was not — and both are worth knowing about if you are building
-something similar.
+| | |
+| --- | --- |
+| `examples/solver-template.py` | the twenty lines, to build your own on |
+| `examples/solver-yolos.py` | YOLOS-tiny, a detector: knows the eighty things COCO has words for, passes on the rest |
+| `examples/solver-clip.py` | CLIP, zero-shot: the category comes from the prompt at runtime, so there is no list to fall off |
+
+The difference matters more than model size. A detector answers "is there a bus here"
+because a bus was in its training labels; ask it about a crosswalk, a staircase, a chimney
+or a bridge — all of which reCAPTCHA asks about — and it has no word for the question.
+CLIP scores a picture against a sentence, and postern already read the sentence out of the
+challenge document, so the category is whatever was asked for this round.
+
+```sh
+examples/install-clip.sh ~/.cache/postern-clip     # venv, models, wrapper
+
+postern solve -kind recaptcha-v2 -url ... -sitekey ... \
+    -image-solver ~/.cache/postern-clip/solve
+```
+
+That script exists because "supply your own vision model" should be a line to copy, not an
+afternoon. It is still an example: a larger CLIP, a fine-tune on captcha tiles or a hosted
+model all plug into the same protocol, which is a PNG in and coordinates out.
+
+**What was hard about this.** Most of these failures were silent — the challenge looked
+answered and simply was not — and all of them are worth knowing about if you are building
+something similar. Each was found by measuring rather than reasoning, and every one of
+them was, at the time, comfortably blamed on the vision model.
 
 *The verify button is often not where the browser says it is.* reCAPTCHA lays its panel
 out taller than the space it gives it, and the buttons end up below a container that clips
@@ -156,11 +179,35 @@ closing the target, and closing a frame's target closes the page holding it: pos
 shutting its own tab, on every site but the demo. The attachment is now made once and kept
 for the life of the tab.
 
-*What is left is the model.* Postern answers the challenge; something has to recognise a
-bicycle in a deliberately degraded 100-pixel photograph. The example solver knows COCO's
-classes and passes on the rest, which is exactly why the protocol has an "ask me a
-different one" exit code. Run with `-v` to see which prompt came up, what your solver made
-of it, and what the panel objected to.
+*A tile is a toggle, and postern was clicking its own answers off.* Naming a tile that is
+already ticked unticks it. On a dynamic grid the solver names the same still-correct tile
+every round, so postern alternated between selecting and deselecting it until the rounds
+ran out — one run spent all six on tile 6 of a bridge challenge, the score alternating
+between two values because the same two pictures kept coming back. Tiles already ticked
+are now left alone. The signature is worth remembering: runs that finish take six grids,
+runs stuck in this take eight to nineteen.
+
+*Chrome does not acknowledge an input event until it has drawn.* `Input.dispatchMouseEvent`
+replies only once the renderer under the pointer has processed it — measured at **43
+seconds for a single click** on a page with one link on it, while that same page answered
+every other command instantly. The event is delivered when the command is sent, so postern
+does not wait for the reply. A click went from 43s to 740ms, and a picture challenge from
+two or three grids in three minutes to six or eight in two.
+
+*The reload button does not promise a different grid.* Pressing it asks; reCAPTCHA is free
+to hand back what it just showed you. Postern pressed and carried on, so a grid the solver
+had nothing for came straight back — seventeen identical rounds, the same score to two
+decimal places, until the budget ran out. Two refusals in a row now end the solve with the
+reason. Failing in twenty seconds beats failing in two minutes.
+
+*An expired challenge is not a refusal.* reCAPTCHA gives a challenge a couple of minutes,
+and a grid answered over several rounds can outlast it. The page's own remedy is the
+widget's "please try again", so that is what postern does now rather than reporting a
+failure the browser never hit.
+
+*What is left really is the model.* Postern answers the challenge; something has to
+recognise a bicycle in a deliberately degraded 100-pixel photograph. Run with `-v` to see
+which prompt came up, what your solver made of it, and what the panel objected to.
 
 ## Requirements
 
@@ -334,6 +381,11 @@ and a bootstrap function that renders the widget and parks the result on
 
 And the house rule for this repository: **claims come with measurements**. If you improve
 the success rate, say against what, how many runs, and what it was before.
+
+CI runs `gofmt`, `go vet`, `go build` and the short tests under `-race` on every push, and
+the browser-driving tests separately — those talk to the vendors' live demos, so they
+report rather than block: a run that is waved through without a challenge has not tested
+anything.
 
 ## License
 
