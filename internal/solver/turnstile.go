@@ -24,9 +24,18 @@ const (
 	interactiveAfter = 3 * time.Second
 
 	// checkboxOffsetX is the distance from the widget's left edge to the middle
-	// of its checkbox, in CSS pixels. The widget is a fixed-size iframe we
-	// cannot read into, but its internal layout does not move.
+	// of its checkbox, in CSS pixels. We cannot read into the iframe to find
+	// the box, but its internal layout does not move.
 	checkboxOffsetX = 30
+
+	// maxClicks bounds the retries. A challenge that has swallowed three
+	// clicks is not going to yield to a fourth.
+	maxClicks = 3
+
+	// clickRetryAfter is the wait before clicking again. Cloudflare takes a
+	// moment to process a click, and clicking through that looks like a bot
+	// mashing the box.
+	clickRetryAfter = 8 * time.Second
 )
 
 // Request describes one challenge to solve.
@@ -89,7 +98,8 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	clicked := false
+	clicks := 0
+	var lastClick time.Time
 
 	for {
 		select {
@@ -105,7 +115,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			var s state
 			// The slot is undefined until the bootstrap runs, and evaluating it
 			// then fails; that is expected, so keep polling.
-			if err := chromedp.Run(tabCtx, chromedp.Evaluate(`window.__postern`, &s)); err != nil {
+			if err := chromedp.Run(tabCtx, chromedp.Evaluate(stateScript, &s)); err != nil {
 				continue
 			}
 			if s.Error != "" {
@@ -117,15 +127,38 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 
 			// An interactive challenge sits there until someone ticks the box.
 			// A failed attempt usually means the widget has not been laid out
-			// yet, so leave the flag down and try again on the next tick.
-			if !clicked && time.Since(start) >= interactiveAfter {
+			// yet, so leave the counter alone and try again on the next tick.
+			if readyToClick(start, lastClick, clicks) {
 				if err := clickCheckbox(tabCtx); err == nil {
-					clicked = true
+					clicks++
+					lastClick = time.Now()
 				}
 			}
 		}
 	}
 }
+
+// readyToClick decides whether this tick should click: never before the widget
+// has had its chance to solve itself, never more than maxClicks times, and
+// never twice in quick succession.
+func readyToClick(start, lastClick time.Time, clicks int) bool {
+	if clicks >= maxClicks || time.Since(start) < interactiveAfter {
+		return false
+	}
+	return clicks == 0 || time.Since(lastClick) >= clickRetryAfter
+}
+
+// stateScript reads the token slot, falling back to the hidden input Turnstile
+// writes alongside the callback. The callback is the documented path, but a
+// widget that filled the field without firing it would otherwise look to us
+// exactly like a widget that solved nothing.
+const stateScript = `(() => {
+  const s = window.__postern || { token: '', error: '' };
+  if (s.token || s.error) return s;
+
+  const field = document.querySelector('#postern-widget [name="cf-turnstile-response"]');
+  return { token: (field && field.value) || '', error: '' };
+})()`
 
 // rect is the widget's box in viewport coordinates.
 type rect struct {
@@ -133,15 +166,32 @@ type rect struct {
 	Y float64 `json:"y"`
 	W float64 `json:"w"`
 	H float64 `json:"h"`
+
+	// Iframe reports whether this is Cloudflare's own frame or our container
+	// standing in for it.
+	Iframe bool `json:"iframe"`
 }
 
-// rectScript reads back the host element we placed ourselves. Reading into the
-// widget's iframe is impossible — it is cross-origin — but the host is ours.
+// rectScript locates what to aim at: Cloudflare's iframe if it is there, and
+// our own container otherwise. Preferring the iframe means the click follows
+// the widget if its position or size ever changes; the container is only a
+// fallback for the window where the frame has not been inserted yet.
 const rectScript = `(() => {
-  const el = document.querySelector('#postern-widget');
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: r.x, y: r.y, w: r.width, h: r.height };
+  const host = document.querySelector('#postern-widget');
+  if (!host) return null;
+
+  for (const frame of host.querySelectorAll('iframe')) {
+    const src = frame.src || frame.getAttribute('src') || '';
+    if (!src.includes('challenges.cloudflare.com')) continue;
+
+    const r = frame.getBoundingClientRect();
+    if (r.width > 50 && r.height > 20) {
+      return { x: r.x, y: r.y, w: r.width, h: r.height, iframe: true };
+    }
+  }
+
+  const r = host.getBoundingClientRect();
+  return { x: r.x, y: r.y, w: r.width, h: r.height, iframe: false };
 })()`
 
 // clickCheckbox aims at the widget's checkbox and clicks it like a hand would.
@@ -154,9 +204,11 @@ func clickCheckbox(ctx context.Context) error {
 		return errors.New("solver: widget not laid out yet")
 	}
 
+	// Aim for the middle of the checkbox, but not for the same pixel every
+	// time — nobody hits a target dead centre twice.
 	target := input.Point{
-		X: box.X + checkboxOffsetX,
-		Y: box.Y + box.H/2,
+		X: box.X + checkboxOffsetX + (rand.Float64()-0.5)*6,
+		Y: box.Y + box.H/2 + (rand.Float64()-0.5)*6,
 	}
 
 	// Start somewhere below and to the right, so the pointer covers real
@@ -199,8 +251,10 @@ func renderScript(req Request) (string, error) {
     }));
   };
 
+  // render=explicit keeps the API from rendering anything it finds on the
+  // page; the only widget we want is the one __posternRender puts up.
   const script = document.createElement('script');
-  script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__posternRender';
+  script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?onload=__posternRender&render=explicit';
   script.async = true;
   script.onerror = () => { window.__postern.error = 'api-script-blocked'; };
   document.head.appendChild(script);
