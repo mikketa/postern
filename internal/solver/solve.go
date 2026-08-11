@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"time"
 
@@ -43,8 +44,9 @@ const (
 	panelAfter = 9 * time.Second
 
 	// maxPanels bounds how many grids we answer in one solve. reCAPTCHA will
-	// hand out fresh ones indefinitely to a client it does not believe.
-	maxPanels = 3
+	// hand out fresh ones indefinitely to a client it does not believe, and
+	// dynamic grids legitimately take several rounds, so this is not tight.
+	maxPanels = 5
 
 	// clickRetryAfter is the wait before clicking again. The vendor takes a
 	// moment to process a click, and clicking through that looks like a bot
@@ -76,6 +78,20 @@ type Request struct {
 	// picture challenges are reported rather than attempted; see
 	// internal/challenge for what the command receives and must print.
 	ImageSolver string
+
+	// Log, when set, records what the challenge did and what was answered.
+	// Picture challenges are otherwise unreadable from the outside: a solve
+	// either produces a token or it does not, and nothing says which prompt
+	// came up, what the solver made of it, or what the panel objected to.
+	Log *slog.Logger
+}
+
+// logger is the request's logger, or one that discards.
+func (r Request) logger() *slog.Logger {
+	if r.Log != nil {
+		return r.Log
+	}
+	return slog.New(slog.DiscardHandler)
 }
 
 // Result is a solved challenge.
@@ -102,6 +118,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	if err != nil {
 		return nil, err
 	}
+	log := req.logger()
 
 	bootstrap, err := p.bootstrap(req)
 	if err != nil {
@@ -153,24 +170,30 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				return nil, fmt.Errorf("solver: %s error %s", req.kindOrDefault(), s.Error)
 			}
 			if s.Token != "" {
+				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
+					"challenges", attempts)
 				return &Result{Token: s.Token, Elapsed: time.Since(start)}, nil
 			}
 
-			// Give the panel a moment to settle: reCAPTCHA flashes it open
-			// during an ordinary verification too, and treating that as a
-			// challenge would derail solves that were about to succeed.
-			if p.panelBy != "" && time.Since(start) >= panelAfter && attempts < maxPanels {
-				panel := findPanel(tabCtx, p.panelBy)
+			// A panel with tiles in it is a real challenge. reCAPTCHA keeps an
+			// empty one around for every widget and flashes it open during
+			// ordinary verifications too, so its mere presence proves nothing.
+			if p.images && time.Since(start) >= panelAfter && attempts < maxPanels {
+				panel, err := challenge.Find(tabCtx)
+				if err != nil {
+					continue
+				}
 				if panel != nil {
 					if req.ImageSolver == "" {
+						panel.Close()
 						return nil, errors.New("solver: an image challenge was served and no " +
 							"image solver is configured — see -image-solver in the README")
 					}
 
 					attempts++
-					if err := challenge.Solve(tabCtx, challenge.Panel{
-						X: panel.X, Y: panel.Y, W: panel.W, H: panel.H,
-					}, req.ImageSolver); err != nil {
+					err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
+					panel.Close()
+					if err != nil {
 						return nil, fmt.Errorf("solver: %w", err)
 					}
 
@@ -200,16 +223,6 @@ func (r Request) kindOrDefault() Kind {
 		return defaultKindValue
 	}
 	return r.Kind
-}
-
-// findPanel returns the challenge panel's geometry, or nil when none is up. A
-// failed evaluation is not a panel: the page may simply be mid-navigation.
-func findPanel(ctx context.Context, script string) *rect {
-	var box *rect
-	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &box)); err != nil {
-		return nil
-	}
-	return box
 }
 
 // readyToClick decides whether this tick should click: never before the widget
@@ -304,9 +317,21 @@ func clickCheckbox(ctx context.Context, frameHost string) error {
 }
 
 // hostSetup is the JavaScript every bootstrap runs first: it adds our container
-// to the page at a known, fixed position, away from the edges so it never lands
-// under a scrollbar, and above everything so no banner of the site can swallow
-// the click meant for the widget.
+// to the page at a known position, away from the edges so it never lands under
+// a scrollbar, and above the site's own furniture so no cookie banner can
+// swallow the click meant for the widget.
+//
+// It is centred vertically because of what opens next to it. reCAPTCHA sizes
+// its picture panel to the room around the widget, and a widget pinned near the
+// top of the window gets a panel squeezed to 480 pixels for a document that
+// needs 530 — with the verify button in the 50 that were cut off, unreachable
+// by any pointer. Given the middle of the window the panel opens at its full
+// height and the button is simply there.
+//
+// The stacking order is a compromise rather than a maximum. reCAPTCHA opens its
+// picture grid at a z-index in the billions; a container pinned to the very top
+// sits in front of that grid, hiding the prompt an image solver needs to read
+// and taking clicks meant for the tiles.
 //
 // It adds rather than replaces. Wiping the document with innerHTML also worked
 // for Turnstile, but it silently broke reCAPTCHA v3: execute() needs the
@@ -319,6 +344,7 @@ const hostSetup = `
 
   const host = document.createElement('div');
   host.id = 'postern-widget';
-  host.style.cssText = 'position:fixed;left:60px;top:90px;z-index:2147483647';
+  host.style.cssText =
+    'position:fixed;left:60px;top:50%;transform:translateY(-50%);z-index:999999';
   document.body.appendChild(host);
 `
