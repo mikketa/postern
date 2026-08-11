@@ -23,6 +23,7 @@ Measured, not asserted. Every row was run against the live service.
 | Challenge | Result |
 | --- | --- |
 | **Turnstile**, production sitekey, managed mode | **5/5 tokens, ~3s each** |
+| Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens, 13.7s total**, median 4s |
 | **reCAPTCHA v3** | token, ~4s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
@@ -123,6 +124,11 @@ postern serve -addr 127.0.0.1:8099
 
 The server binds to localhost and has **no authentication**. Keep it that way, or put
 something in front of it.
+
+One Chrome is shared across requests, and each solve gets its own window inside it —
+which is both faster than starting a browser per solve (a warm browser solves in about
+1.5s) and necessary: tabs sharing a window are backgrounded, and a page that is not
+painted never runs its widget.
 
 #### `POST /solve`
 
