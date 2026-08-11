@@ -34,11 +34,10 @@ type provider struct {
 	// invisible widget driven entirely from JavaScript.
 	clickable bool
 
-	// panelBy, when set, is a script returning the vendor's picture-grid panel
-	// once it is up, or null. With an image solver configured it is something
-	// to answer; without one it is a wall, and reporting that immediately
-	// beats sitting out the full timeout.
-	panelBy string
+	// images marks a vendor that serves picture grids. With an image solver
+	// configured they are something to answer; without one they are a wall, and
+	// reporting that immediately beats sitting out the full timeout.
+	images bool
 
 	// bootstrap builds the in-page script that renders the widget and parks
 	// the result on window.__postern.
@@ -58,14 +57,14 @@ var providers = map[Kind]provider{
 		tokenField: "g-recaptcha-response",
 		frameHost:  "google.com/recaptcha",
 		clickable:  true,
-		panelBy:    challengePanelScript,
+		images:     true,
 		bootstrap:  recaptchaV2Bootstrap,
 	},
 	RecaptchaInvis: {
 		tokenField: "g-recaptcha-response",
 		frameHost:  "google.com/recaptcha",
 		clickable:  false,
-		panelBy:    challengePanelScript,
+		images:     true,
 		bootstrap:  recaptchaInvisibleBootstrap,
 	},
 	RecaptchaV3: {
@@ -98,19 +97,3 @@ func Kinds() []string {
 	sort.Strings(names)
 	return names
 }
-
-// challengePanelScript returns the geometry of reCAPTCHA's challenge panel —
-// the grid of photographs — or null when it is not up. The panel exists on the
-// page from the start, parked off-screen and small; it is only a challenge
-// once it has been moved into view and grown.
-const challengePanelScript = `(() => {
-  for (const frame of document.querySelectorAll('iframe')) {
-    if (!(frame.src || '').includes('/recaptcha/api2/bframe')) continue;
-
-    const r = frame.getBoundingClientRect();
-    if (r.width > 100 && r.height > 200 && r.y > -1000) {
-      return { x: r.x, y: r.y, w: r.width, h: r.height, iframe: true };
-    }
-  }
-  return null;
-})()`
