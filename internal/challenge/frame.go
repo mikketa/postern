@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
@@ -342,8 +341,12 @@ func panelIsOpen(ctx context.Context) (bool, error) {
 
 // findLocal looks through the frames the page's own session can see.
 func findLocal(outer context.Context) (*Frame, error) {
-	var found *Frame
+	var world runtime.ExecutionContextID
+	var view View
 
+	// Reading happens inside one Run; locating the frame afterwards needs
+	// another, and chromedp serialises Runs on a context — starting the second
+	// from inside the first deadlocks until the whole solve times out.
 	err := chromedp.Run(outer, chromedp.ActionFunc(func(ctx context.Context) error {
 		tree, err := page.GetFrameTree().Do(ctx)
 		if err != nil {
@@ -351,35 +354,39 @@ func findLocal(outer context.Context) (*Frame, error) {
 		}
 
 		for _, id := range challengeFrames(tree) {
-			world, err := page.CreateIsolatedWorld(id).WithWorldName("postern").Do(ctx)
+			candidate, err := page.CreateIsolatedWorld(id).WithWorldName("postern").Do(ctx)
 			if err != nil {
 				continue
 			}
 
-			view, err := readWorld(ctx, world)
-			if err != nil || len(view.Tiles) == 0 || view.Height < minPanelHeight {
+			read, err := readWorld(ctx, candidate)
+			if err != nil || len(read.Tiles) == 0 || read.Height < minPanelHeight {
 				continue
 			}
 
-			locate := func(ctx context.Context) (x, y float64, err error) {
-				err = chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-					x, y, err = ownerPosition(ctx, id)
-					return err
-				}))
-				return x, y, err
-			}
-
-			x, y, err := ownerPosition(ctx, id)
-			if err != nil {
-				continue
-			}
-			found = &Frame{runCtx: outer, world: world, locate: locate,
-				OriginX: x, OriginY: y, View: view}
+			world, view = candidate, read
 			return nil
 		}
 		return nil
 	}))
-	return found, err
+	if err != nil || view.URL == "" {
+		return nil, err
+	}
+
+	// Located by address rather than by DOM.getFrameOwner, which has been seen
+	// to never answer — and a solve that blocks on it sits there until the
+	// whole run times out.
+	url := view.URL
+	locate := func(ctx context.Context) (float64, float64, error) {
+		return hostPosition(ctx, url)
+	}
+
+	x, y, err := locate(outer)
+	if err != nil {
+		return nil, nil
+	}
+	return &Frame{runCtx: outer, world: world, locate: locate,
+		OriginX: x, OriginY: y, View: view}, nil
 }
 
 // findAttached looks through the browser's targets, which is where a frame in
@@ -596,24 +603,6 @@ func readWorld(ctx context.Context, world runtime.ExecutionContextID) (View, err
 		return view, err
 	}
 	return view, json.Unmarshal([]byte(encoded), &view)
-}
-
-// ownerPosition asks the DOM where a frame's element sits. Only usable for a
-// frame the page's session owns; a frame in another process has no node here.
-func ownerPosition(ctx context.Context, id cdp.FrameID) (float64, float64, error) {
-	backendID, _, err := dom.GetFrameOwner(id).Do(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	model, err := dom.GetBoxModel().WithBackendNodeID(backendID).Do(ctx)
-	if err != nil {
-		return 0, 0, err
-	}
-	if len(model.Content) < 2 {
-		return 0, 0, fmt.Errorf("frame owner has no box")
-	}
-	return model.Content[0], model.Content[1], nil
 }
 
 // hostPosition finds the frame's element in the host page by its address.
