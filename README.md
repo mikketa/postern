@@ -1,10 +1,10 @@
 # postern
 
-**Cloudflare Turnstile solver that drives a real Chrome instead of pretending to be one.**
+**A captcha solver that drives a real Chrome instead of pretending to be one.**
 
 No token farms, no paid captcha API, no headless browser dressed up to look human.
-Postern launches the Chrome already installed on the machine, with a profile that
-persists between runs, renders the widget itself, and hands back the token.
+Postern launches the Chrome already installed on the machine, gives it a screen nobody is
+looking at, renders the widget itself, and hands back the token.
 
 A postern is the small side door of a fortress — the one you walk through instead of
 attacking the wall.
@@ -16,64 +16,78 @@ $ postern solve -url https://example.com/login -sitekey 0x4AAAAAAA...
 
 ---
 
+## What actually works
+
+Measured, not asserted. Every row was run against the live service.
+
+| Challenge | Result |
+| --- | --- |
+| **Turnstile**, production sitekey, managed mode | **5/5 tokens, ~3s each** |
+| **reCAPTCHA v3** | token, ~4s |
+| **reCAPTCHA v2 invisible** | token, ~4s |
+| **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
+| **reCAPTCHA v2 checkbox**, image challenge served | **fails, by design** — see below |
+
+The one that does not work deserves the detail rather than a footnote. When Google
+decides you are worth challenging, it puts up a grid of photographs, and postern has no
+answer for that — it reports it in about nine seconds instead of burning the timeout. The
+usual escape hatch is the audio challenge; on this setup Google refuses to serve it at
+all, answering *"Your computer or network may be sending automated queries"*. So the
+lever for reCAPTCHA v2 is not better automation, it is **reputation**: a profile with
+history behind it, and an IP that is not a datacenter.
+
+Turnstile, by contrast, is solved reliably, including in its managed mode.
+
 ## How it works
 
 ```
-postern                                 Chrome — your profile, automation flags stripped
-   │                                      │
-   │  1. navigate to the target page ────►│   the origin Cloudflare sees is the real one
-   │  2. render our own widget ──────────►│   challenges.cloudflare.com/turnstile/v0/api.js
-   │  3. click, if nothing happens ──────►│   trusted pointer events, curved path
-   │  4. poll window.__postern ◄──────────│   the widget callback parks the token there
-   │                                      │
+postern                                  Chrome — real binary, real window, virtual screen
+   │                                       │
+   │  1. navigate to the target page ─────►│   the origin the vendor sees is the real one
+   │  2. add our own widget to it ────────►│   the vendor's api.js, our sitekey
+   │  3. click, if nothing happens ───────►│   trusted pointer events, curved path
+   │  4. poll window.__postern ◄───────────│   the widget callback parks the token there
+   │                                       │
    ▼
  token
 ```
 
-Three decisions shape everything else:
+Four decisions carry the whole thing.
 
 **The browser is genuine.** Not a spoofed user agent, not a patched headless build — the
 real binary, launched with `--disable-blink-features=AutomationControlled` and without
 the automation banner, reusing the same profile every run so it ages like a person's.
 
-It runs headless by default, and headless gives itself away in three specific places, so
-each one is corrected at the source rather than papered over in JavaScript:
+**It is windowed, not headless.** This is the one that mattered most, and it came from a
+measurement. Against a production Turnstile sitekey, headless Chrome was refused **six
+times out of six** — even with its user agent corrected, its GPU re-enabled and its
+screen size fixed. The same binary driving a windowed Chrome on a virtual display was
+accepted **seven times out of seven**. Headless is detectable by means that cannot be
+enumerated, so postern stops being headless instead of patching symptoms one at a time:
+it starts its own Xvfb, which shows nothing on screen either. `-headless` is still
+there, and the fingerprint corrections still apply to it, but it is not the default and
+the numbers say it should not be.
 
-| Headless out of the box | Postern |
-| --- | --- |
-| `HeadlessChrome/151.0.0.0` in the user agent | the same UA with the token removed, read from the browser itself so it never goes stale |
-| WebGL renderer is `SwiftShader` — software rendering | GPU re-enabled, so it reports the real adapter |
-| `screen` is 800x600, and the viewport is exactly as tall as it | a real screen size, with a window shorter than the screen — no browser has zero UI |
+**The widget is ours.** Postern renders a fresh widget with the site's key rather than
+hunting for the one on the page. Sites lay out their forms in a hundred different ways;
+the widget APIs are identical everywhere. The container is *added* to the page rather
+than replacing it — an earlier version wiped the document, which worked for Turnstile
+and silently broke reCAPTCHA v3, whose `execute()` needs the elements the API quietly
+created for itself.
 
-`internal/browser/fingerprint_test.go` asserts all three. They were measured, not guessed.
-
-**The widget is ours.** Postern renders a fresh Turnstile widget with the site's sitekey
-rather than hunting for the one on the page. Sites lay out their forms in a hundred
-different ways; the widget API is identical everywhere. It also means the widget sits at
-coordinates we chose, which is what makes the next part possible.
-
-**The pointer is real.** Interactive challenges wait for a checkbox to be ticked, and
-the checkbox lives in a cross-origin iframe nothing on the page can reach into. Postern
+**The pointer is real.** Interactive challenges wait for a checkbox to be ticked, and the
+checkbox lives in a cross-origin iframe nothing on the page can reach into. Postern
 clicks it from the outside: pointer events dispatched over CDP, so the page sees
 `isTrusted`, following a curved path with easing and jitter rather than teleporting onto
-the target. The click only fires once the widget has had a few seconds to solve itself —
-most challenges never need it — and is retried up to three times, eight seconds apart,
-because a click that lands while Cloudflare is still thinking is a click wasted.
-
-The click aims at Cloudflare's own iframe when it is present, and at our container
-otherwise, so it follows the widget if its size or position ever changes. The token is
-read from the callback and, failing that, from the hidden `cf-turnstile-response` field
-next to the widget: a widget that fills the field without firing the callback would
-otherwise be indistinguishable from one that solved nothing.
-
-The pleasant consequence is that there is very little left to patch. `internal/patches/`
-is nearly empty on purpose — a clumsy override is a stronger fingerprint than whatever it
-was meant to hide.
+the target. The click fires only once the widget has had a few seconds to solve itself,
+and is retried up to three times, eight seconds apart.
 
 ## Requirements
 
-- **Go 1.26+** — required by `chromedp`, not by Postern itself
-- **Chrome or Chromium**, any recent version
+- **Go 1.26+** to build — required by `chromedp`, not by Postern itself
+- **Chrome or Chromium**
+- **Xvfb**, unless you pass `-display host` or `-headless`
+  (`xorg-server-xvfb` on Arch, `xvfb` on Debian)
 
 ## Install
 
@@ -95,7 +109,11 @@ Token on stdout, nothing else — pipe it straight into whatever needs it.
 
 ```sh
 postern solve -url https://example.com/login -sitekey 0x4AAAAAAA...
+postern solve -kind recaptcha-v3 -url https://example.com -sitekey 6Lc... -action login
 ```
+
+`-kind` takes `turnstile` (the default), `recaptcha-v2`, `recaptcha-v2-invisible` or
+`recaptcha-v3`.
 
 ### As a local service
 
@@ -119,17 +137,16 @@ curl -s localhost:8099/solve -d '{
 | --- | --- | --- | --- |
 | `url` | string | yes | The page the widget belongs to — it decides the origin |
 | `sitekey` | string | yes | Found in the target page markup |
-| `action` | string | no | Required whenever the site sets one |
-| `cdata` | string | no | Required whenever the site sets one |
+| `kind` | string | no | Challenge kind, as above. Defaults to `turnstile` |
+| `action` | string | no | Turnstile and reCAPTCHA v3; must match what the site uses |
+| `cdata` | string | no | Turnstile only |
 | `timeout_ms` | int | no | Overrides the server default for this request |
 
 ```json
 { "token": "0.qF8mZ2...9dK1", "elapsed_ms": 3140 }
 ```
 
-Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. A token obtained
-without the `action` and `cdata` the site actually uses will be refused at validation
-time, so pass them when they are there.
+Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status.
 
 #### `GET /health`
 
@@ -142,7 +159,8 @@ time, so pass them when they are there.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-profile` | `~/.config/postern/profile` | Chrome profile directory, reused across runs |
-| `-headless` | `true` | Run without a window. `-headless=false` for a windowed browser |
+| `-display` | `virtual` | `virtual` starts an Xvfb of our own; `host` uses your session and is visible |
+| `-headless` | `false` | Headless mode. Measurably more detectable — see above |
 | `-screen` | `1920x1080` | Virtual screen size, `WxH`. The window is sized from it |
 | `-chrome` | autodetect | Path to the Chrome binary |
 | `-proxy` | none | Passed through to `--proxy-server` |
@@ -150,10 +168,9 @@ time, so pass them when they are there.
 | `-concurrency` | `2` | *(serve)* solves running at the same time |
 | `-addr` | `127.0.0.1:8099` | *(serve)* listen address |
 
-## Testing without a target site
+## Testing
 
-Cloudflare publishes dummy keys that work from any domain, including localhost. Use them
-to check the pipeline end to end before pointing Postern at anything real.
+Cloudflare publishes dummy keys that work from any domain, including localhost.
 
 | Sitekey | Behaviour |
 | --- | --- |
@@ -163,9 +180,13 @@ to check the pipeline end to end before pointing Postern at anything real.
 | `2x00000000000000000000BB` | always fails, invisible |
 | `3x00000000000000000000FF` | forces an interactive challenge, visible |
 
-A dummy token is only accepted by a matching dummy secret — `1x0000000000000000000000000000000AA`
-always validates, `2x0000000000000000000000000000000AA` never does. Production secrets
-reject dummy tokens outright.
+Be aware of what they do **not** exercise: they return a fixed `XXXX.DUMMY.TOKEN.XXXX`
+with no risk analysis behind it — no fingerprint scoring, no behavioural checks — and
+they render no iframe, only the container and the hidden field. They prove the plumbing
+works. They say nothing about a production sitekey, which is why the table at the top of
+this file was measured against one.
+
+Validate a dummy token with the matching dummy secret:
 
 ```sh
 token=$(postern solve -url https://example.com -sitekey 1x00000000000000000000AA)
@@ -175,52 +196,26 @@ curl -s https://challenges.cloudflare.com/turnstile/v0/siteverify \
   -d response="$token"
 ```
 
-A green `"success": true` here means the whole chain works — browser, widget, callback,
-and a token Cloudflare's own endpoint accepts.
-
-Be aware of what the dummy keys do **not** exercise: they return a fixed
-`XXXX.DUMMY.TOKEN.XXXX` with no risk analysis behind it — no fingerprint scoring, no
-behavioural checks — and they render no iframe, only the container and the hidden field.
-They prove the plumbing works. They say nothing about a production sitekey.
-
-There are also integration tests that launch a browser and check what a page can see.
-They need Chrome, so `go test -short ./...` skips them:
+Integration tests launch a browser and check what a page can see, including a fingerprint
+test that pins down the headless corrections. They need Chrome, so `go test -short ./...`
+skips them:
 
 ```sh
 go test ./internal/... -v
 ```
 
-Rough timings against the dummy keys, headless, warm profile:
-
-| Sitekey | Outcome |
-| --- | --- |
-| `1x…AA` | token in ~2s |
-| `3x…FF` | token in ~4s — 3s of that is the deliberate wait before clicking |
-| `2x…AB` | fails fast with Turnstile error `600010`, no waiting for the timeout |
-
-## Known limits
-
-- **Tokens expire after 300 seconds.** Solve late, not early.
-- **A strict CSP on the target page can block the widget script.** You get
-  `api-script-blocked`; bypassing CSP over CDP is not wired up yet.
-- **If the target URL is itself behind a full-page challenge**, navigation lands on the
-  interstitial rather than the page. Point `-url` at something reachable on the origin.
-- **This is one browser with a couple of tabs.** It is not built for volume and will not
-  be.
-
 ## Running on a server
 
-Postern runs fine on a headless Linux box — Chrome, roughly 500MB of RAM, nothing else.
-Running as root works without extra flags, since `--no-sandbox` is added automatically in
-that case, though a dedicated user is the better idea.
+Postern runs fine on a headless Linux box — Chrome, Xvfb, roughly 500MB of RAM. Running
+as root works without extra flags, since `--no-sandbox` is added automatically in that
+case, though a dedicated user is the better idea.
 
-Be aware of what a server takes back, though:
+Be aware of what a server takes back:
 
-- **No GPU means SwiftShader again.** Virtualised graphics adapters offer no 3D
-  acceleration, so WebGL reports software rendering — one of the three things the
-  headless setup above exists to avoid. Faking the WebGL strings is not a fix: supported
-  extensions, shader precision and raw rendering speed keep giving it away, so the
-  override ends up more inconsistent than the thing it hid.
+- **No GPU means software rendering.** Virtualised graphics adapters offer no 3D
+  acceleration, so WebGL reports SwiftShader, which no desktop does. Faking the WebGL
+  strings is not a fix: supported extensions, shader precision and raw rendering speed
+  keep giving it away, so the override ends up more inconsistent than the thing it hid.
 - **Datacenter IPs carry their own reputation**, and it weighs more than anything the
   browser does. Expect challenges to be served more often and to be harder from a hosting
   range than from a residential connection. `-proxy` exists for this reason.
@@ -247,7 +242,12 @@ Two rules for patches:
 2. **Make the override conditional.** Redefining a property that was already correct
    leaves a descriptor that does not match a stock browser, which is its own tell.
 
-Bug reports travel much better with the target URL, the sitekey, and the Chrome version.
+Adding a vendor means adding an entry to the registry in `internal/solver/provider.go`
+and a bootstrap function that renders the widget and parks the result on
+`window.__postern`. The solve loop does not change.
+
+And the house rule for this repository: **claims come with measurements**. If you improve
+the success rate, say against what, how many runs, and what it was before.
 
 ## License
 
