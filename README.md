@@ -196,6 +196,23 @@ Rough timings against the dummy keys, headless, warm profile:
 - **This is one browser with a couple of tabs.** It is not built for volume and will not
   be.
 
+## Running on a server
+
+Postern runs fine on a headless Linux box — Chrome, roughly 500MB of RAM, nothing else.
+Running as root works without extra flags, since `--no-sandbox` is added automatically in
+that case, though a dedicated user is the better idea.
+
+Be aware of what a server takes back, though:
+
+- **No GPU means SwiftShader again.** Virtualised graphics adapters offer no 3D
+  acceleration, so WebGL reports software rendering — one of the three things the
+  headless setup above exists to avoid. Faking the WebGL strings is not a fix: supported
+  extensions, shader precision and raw rendering speed keep giving it away, so the
+  override ends up more inconsistent than the thing it hid.
+- **Datacenter IPs carry their own reputation**, and it weighs more than anything the
+  browser does. Expect challenges to be served more often and to be harder from a hosting
+  range than from a residential connection. `-proxy` exists for this reason.
+
 ## Scope
 
 Postern exists for automating things you are allowed to automate: your own sites, your
