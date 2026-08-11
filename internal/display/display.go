@@ -12,30 +12,22 @@
 // time. Correcting the user agent, the GPU and the screen size was not enough —
 // headless is detectable by means we cannot enumerate, so the fix is to stop
 // being headless rather than to keep patching the symptoms.
-//
-// Xvfb gives us exactly that: a real, windowed browser on a screen nobody
-// looks at.
 package display
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// startupGrace is how long Xvfb gets to come up before we hand Chrome the
-// display. Chrome fails outright if the X server is not listening yet.
-const startupGrace = 700 * time.Millisecond
-
-// firstScreen is where the search for a free display number starts. Low
-// numbers belong to real sessions.
-const firstScreen = 90
-
-// screensToTry bounds the search so a broken Xvfb cannot spin forever.
-const screensToTry = 20
+// startupTimeout bounds the wait for Xvfb to report the display it took.
+const startupTimeout = 5 * time.Second
 
 // Mode selects where Chrome draws.
 type Mode string
@@ -69,6 +61,9 @@ func Ensure(ctx context.Context, width, height int, mode Mode) (*Display, error)
 		}
 		return &Display{}, nil
 	}
+	if mode != Virtual && mode != "" {
+		return nil, fmt.Errorf("display: unknown mode %q, want %q or %q", mode, Virtual, Host)
+	}
 
 	xvfb, err := exec.LookPath("Xvfb")
 	if err != nil {
@@ -77,31 +72,65 @@ func Ensure(ctx context.Context, width, height int, mode Mode) (*Display, error)
 			"to use the session already running, or -headless")
 	}
 
-	for n := firstScreen; n < firstScreen+screensToTry; n++ {
-		name := fmt.Sprintf(":%d", n)
-		if inUse(name) {
-			continue
-		}
+	// -displayfd hands the choice of display number to Xvfb, which writes the
+	// one it took to the given descriptor. Picking a number ourselves means
+	// racing every other X server on the machine and tripping over the stale
+	// lock files a killed one leaves behind.
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("display: pipe: %w", err)
+	}
+	defer readEnd.Close()
 
-		cmd := exec.CommandContext(ctx, xvfb, name,
-			"-screen", "0", fmt.Sprintf("%dx%dx24", width, height),
-			"-nolisten", "tcp")
-		if err := cmd.Start(); err != nil {
-			continue
-		}
+	cmd := exec.CommandContext(ctx, xvfb,
+		"-displayfd", "3",
+		"-screen", "0", fmt.Sprintf("%dx%dx24", width, height),
+		"-nolisten", "tcp")
+	cmd.ExtraFiles = []*os.File{writeEnd}
 
-		// Xvfb exits immediately if the display was taken between our check
-		// and the start; give it a moment and make sure it is still alive.
-		time.Sleep(startupGrace)
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			continue
-		}
+	if err := cmd.Start(); err != nil {
+		writeEnd.Close()
+		return nil, fmt.Errorf("display: start Xvfb: %w", err)
+	}
+	// The child holds its own copy; ours has to go or the read never ends.
+	writeEnd.Close()
 
-		return &Display{Name: name, cmd: cmd}, nil
+	number, err := readDisplayNumber(readEnd)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("display: no free display number in :%d-:%d",
-		firstScreen, firstScreen+screensToTry-1)
+	return &Display{Name: ":" + number, cmd: cmd}, nil
+}
+
+// readDisplayNumber waits for Xvfb to announce the display it claimed.
+func readDisplayNumber(r *os.File) (string, error) {
+	type result struct {
+		line string
+		err  error
+	}
+	done := make(chan result, 1)
+
+	go func() {
+		line, err := bufio.NewReader(r).ReadString('\n')
+		done <- result{strings.TrimSpace(line), err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.line == "" {
+			return "", fmt.Errorf("display: Xvfb reported no display number: %w", res.err)
+		}
+		if _, err := strconv.Atoi(res.line); err != nil {
+			return "", fmt.Errorf("display: Xvfb reported %q, which is not a display number", res.line)
+		}
+		return res.line, nil
+
+	case <-time.After(startupTimeout):
+		return "", errors.New("display: Xvfb did not come up within " + startupTimeout.String())
+	}
 }
 
 // Env returns the environment entries Chrome needs, empty when the host
@@ -120,12 +149,4 @@ func (d *Display) Close() {
 	}
 	_ = d.cmd.Process.Kill()
 	_, _ = d.cmd.Process.Wait()
-}
-
-// inUse reports whether an X server already holds this display number. X
-// servers keep a lock file per display, which is cheaper and more reliable
-// than trying to connect.
-func inUse(name string) bool {
-	_, err := os.Stat("/tmp/.X" + name[1:] + "-lock")
-	return err == nil
 }
