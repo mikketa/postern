@@ -34,6 +34,12 @@ type provider struct {
 	// invisible widget driven entirely from JavaScript.
 	clickable bool
 
+	// blockedBy, when set, is a script returning true once the vendor has put
+	// up something this solver cannot answer — an image challenge. Reporting
+	// that immediately beats sitting out the full timeout, since no amount of
+	// waiting turns a picture of a bicycle into a token.
+	blockedBy string
+
 	// bootstrap builds the in-page script that renders the widget and parks
 	// the result on window.__postern.
 	bootstrap func(Request) (string, error)
@@ -52,12 +58,14 @@ var providers = map[Kind]provider{
 		tokenField: "g-recaptcha-response",
 		frameHost:  "google.com/recaptcha",
 		clickable:  true,
+		blockedBy:  challengePanelScript,
 		bootstrap:  recaptchaV2Bootstrap,
 	},
 	RecaptchaInvis: {
 		tokenField: "g-recaptcha-response",
 		frameHost:  "google.com/recaptcha",
 		clickable:  false,
+		blockedBy:  challengePanelScript,
 		bootstrap:  recaptchaInvisibleBootstrap,
 	},
 	RecaptchaV3: {
@@ -90,3 +98,17 @@ func Kinds() []string {
 	sort.Strings(names)
 	return names
 }
+
+// challengePanelScript reports whether reCAPTCHA has opened its challenge
+// panel — the grid of photographs. The panel exists on the page from the
+// start, parked off-screen and small; it is only a challenge once it has been
+// moved into view and grown.
+const challengePanelScript = `(() => {
+  for (const frame of document.querySelectorAll('iframe')) {
+    if (!(frame.src || '').includes('/recaptcha/api2/bframe')) continue;
+
+    const r = frame.getBoundingClientRect();
+    if (r.width > 100 && r.height > 200 && r.y > -1000) return true;
+  }
+  return false;
+})()`

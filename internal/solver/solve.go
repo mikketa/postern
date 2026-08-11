@@ -36,6 +36,11 @@ const (
 	// clicks is not going to yield to a fourth.
 	maxClicks = 3
 
+	// blockedAfter is how long a challenge panel must have been up before we
+	// call it a wall rather than a verification in progress. It sits well past
+	// interactiveAfter so the click has had its chance to be accepted.
+	blockedAfter = 9 * time.Second
+
 	// clickRetryAfter is the wait before clicking again. The vendor takes a
 	// moment to process a click, and clicking through that looks like a bot
 	// mashing the box.
@@ -140,6 +145,14 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				return &Result{Token: s.Token, Elapsed: time.Since(start)}, nil
 			}
 
+			// Give the panel a moment to settle: reCAPTCHA flashes it open
+			// during an ordinary verification too, and calling that a block
+			// would fail solves that were about to succeed.
+			if p.blockedBy != "" && time.Since(start) >= blockedAfter && blocked(tabCtx, p.blockedBy) {
+				return nil, errors.New("solver: an image challenge was served, " +
+					"which this solver cannot answer — see the README on reputation")
+			}
+
 			// An interactive challenge sits there until someone ticks the box.
 			// A failed attempt usually means the widget has not been laid out
 			// yet, so leave the counter alone and try again on the next tick.
@@ -159,6 +172,16 @@ func (r Request) kindOrDefault() Kind {
 		return defaultKindValue
 	}
 	return r.Kind
+}
+
+// blocked reports whether the vendor has put up something unanswerable. A
+// failed evaluation is not a block: the page may simply be mid-navigation.
+func blocked(ctx context.Context, script string) bool {
+	var yes bool
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &yes)); err != nil {
+		return false
+	}
+	return yes
 }
 
 // readyToClick decides whether this tick should click: never before the widget
