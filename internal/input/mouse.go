@@ -33,7 +33,7 @@ func Click(from, to Point) chromedp.ActionFunc {
 		}
 
 		// People do not click the instant the pointer stops.
-		if err := pause(ctx, 70, 160); err != nil {
+		if err := Pause(ctx, 70, 160); err != nil {
 			return err
 		}
 
@@ -45,7 +45,7 @@ func Click(from, to Point) chromedp.ActionFunc {
 		}
 
 		// Dwell time between press and release.
-		if err := pause(ctx, 45, 110); err != nil {
+		if err := Pause(ctx, 45, 110); err != nil {
 			return err
 		}
 
@@ -81,7 +81,7 @@ func move(ctx context.Context, from, to Point) error {
 		if err := input.DispatchMouseEvent(input.MouseMoved, p.X, p.Y).Do(ctx); err != nil {
 			return err
 		}
-		if err := pause(ctx, 6, 20); err != nil {
+		if err := Pause(ctx, 6, 20); err != nil {
 			return err
 		}
 	}
@@ -129,8 +129,10 @@ func ease(t float64) float64 {
 	return 1 - math.Pow(-2*t+2, 3)/2
 }
 
-// pause sleeps for a random duration in [minMS, maxMS], honouring ctx.
-func pause(ctx context.Context, minMS, maxMS int) error {
+// Pause sleeps for a random duration in [minMS, maxMS], honouring ctx. It is
+// exported because pacing is not only a mouse concern: anything that acts on a
+// page in several steps needs the same irregular gaps between them.
+func Pause(ctx context.Context, minMS, maxMS int) error {
 	d := time.Duration(minMS+rand.IntN(maxMS-minMS+1)) * time.Millisecond
 
 	timer := time.NewTimer(d)
