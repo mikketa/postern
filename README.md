@@ -27,15 +27,18 @@ Measured, not asserted. Every row was run against the live service.
 | **reCAPTCHA v3** | token, ~4s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **fails, by design** — see below |
+| **reCAPTCHA v2 checkbox**, image challenge served | needs an image solver — see below |
 
-The one that does not work deserves the detail rather than a footnote. When Google
-decides you are worth challenging, it puts up a grid of photographs, and postern has no
-answer for that — it reports it in about nine seconds instead of burning the timeout. The
-usual escape hatch is the audio challenge; on this setup Google refuses to serve it at
-all, answering *"Your computer or network may be sending automated queries"*. So the
-lever for reCAPTCHA v2 is not better automation, it is **reputation**: a profile with
-history behind it, and an IP that is not a datacenter.
+The last row deserves the detail rather than a footnote. When Google decides you are
+worth challenging, it puts up a grid of photographs. Postern will drive that grid — see
+[picture challenges](#picture-challenges) — but only if you give it something that can
+look at pictures. With no solver configured it says so in about nine seconds rather than
+burning the timeout.
+
+The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
+at all, answering *"Your computer or network may be sending automated queries"*. So the
+other lever for reCAPTCHA v2 is **reputation** — a profile with history behind it, and an
+IP that is not a datacenter — which is not something a solver can manufacture.
 
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
@@ -82,6 +85,43 @@ clicks it from the outside: pointer events dispatched over CDP, so the page sees
 `isTrusted`, following a curved path with easing and jitter rather than teleporting onto
 the target. The click fires only once the widget has had a few seconds to solve itself,
 and is retried up to three times, eight seconds apart.
+
+## Picture challenges
+
+Postern ships no vision model. Which one to use is not a decision a captcha solver should
+make for you, and embedding one would drag a large dependency into a binary whose whole
+appeal is that it has none. So the panel is captured, handed to a command you nominate,
+and whatever that command says gets clicked:
+
+```sh
+postern solve -kind recaptcha-v2 -url ... -sitekey ... \
+    -image-solver "python3 examples/solver-template.py"
+```
+
+The protocol is deliberately dumb — a solver is a twenty-line script:
+
+| | |
+| --- | --- |
+| **argv** | the path to a PNG of the challenge panel, prompt included |
+| **stdout** | one `x,y` per line, in pixels within that image; nothing means nothing to click |
+| **exit** | non-zero means "could not solve" |
+
+Coordinates rather than tile indices, because the panel is not one fixed size — it came
+out 300x480 for one challenge type and 400x580 for another — and it is a cross-origin
+iframe nothing can measure from the inside. Whatever is looking at the picture can see
+the layout; postern should not have to guess it.
+
+`examples/solver-template.py` is the starting point.
+
+**What has been verified, and what has not.** Driving a live challenge with a
+human-in-the-loop solver confirmed the mechanism end to end: the panel is found, captured
+and passed on, and the clicks land where they are meant to — reCAPTCHA accepted the
+selected tiles and replaced them, which is what it does for a correct pick in a dynamic
+grid. What that run did *not* produce is a token, because a human answering through a
+file takes half a minute per round and reCAPTCHA expires the validation long before that.
+Whether a real solver gets you a token therefore depends on the model you plug in and on
+how fast it answers — aim for a couple of seconds. The plumbing works; the seeing is
+yours to supply.
 
 ## Requirements
 
@@ -170,6 +210,7 @@ Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status.
 | `-screen` | `1920x1080` | Virtual screen size, `WxH`. The window is sized from it |
 | `-chrome` | autodetect | Path to the Chrome binary |
 | `-proxy` | none | Passed through to `--proxy-server` |
+| `-image-solver` | none | Command that answers picture grids; see [picture challenges](#picture-challenges) |
 | `-timeout` | `60s` | Give up on a challenge after this long |
 | `-concurrency` | `2` | *(serve)* solves running at the same time |
 | `-addr` | `127.0.0.1:8099` | *(serve)* listen address |

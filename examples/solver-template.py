@@ -40,7 +40,7 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     of the panel minus a small margin.
     """
     raise NotImplementedError(
-        "point this at a vision model: read the prompt out of the image, "
+        f"point this at a vision model: read the prompt out of {image_path}, "
         "find the tiles that match it, return their centres"
     )
 
