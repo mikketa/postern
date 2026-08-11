@@ -37,12 +37,24 @@ func recaptchaV2Bootstrap(req Request) (string, error) {
 %s
 
   window.__posternRender = () => {
-    window.grecaptcha.render(document.querySelector('#postern-widget'), {
+    window.__posternWidget = window.grecaptcha.render(document.querySelector('#postern-widget'), {
       sitekey: %s,
       callback: (token) => { window.__postern.token = token; },
       'error-callback': () => { window.__postern.error = 'error-callback'; },
       'expired-callback': () => { window.__postern.error = 'expired'; },
     });
+  };
+
+  // Clearing the widget back to an unticked checkbox, which is what the page's
+  // own "please try again" button would do. A picture challenge can outlast the
+  // session that served it, and starting over is an ordinary thing to do about
+  // that rather than a reason to give up.
+  window.__posternReset = () => {
+    if (window.__posternWidget === undefined) return false;
+    window.__postern.error = '';
+    window.__postern.token = '';
+    window.grecaptcha.reset(window.__posternWidget);
+    return true;
   };
 
   const script = document.createElement('script');

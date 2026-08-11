@@ -52,7 +52,22 @@ const (
 	// moment to process a click, and clicking through that looks like a bot
 	// mashing the box.
 	clickRetryAfter = 8 * time.Second
+
+	// maxResets bounds how many times an expired challenge is started over.
+	// Two, because the remaining budget is what really limits this — a reset
+	// costs a fresh checkbox and whatever the widget serves next, and if that
+	// keeps expiring the timeout is the honest answer.
+	maxResets = 2
 )
+
+// errExpired is reCAPTCHA telling us the challenge outlived its session, which
+// is a thing to start over rather than a thing to report.
+const errExpired = "expired"
+
+// resetScript clears the widget back to an unticked checkbox. The bootstrap
+// installs the function; a page rendered before it existed says so by being
+// undefined, and the caller reports the original error instead.
+const resetScript = `typeof window.__posternReset === 'function' && window.__posternReset()`
 
 // Request describes one challenge to solve.
 type Request struct {
@@ -151,6 +166,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 
 	clicks := 0
 	attempts := 0
+	resets := 0
 	var lastClick time.Time
 
 	for {
@@ -171,6 +187,24 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				continue
 			}
 			if s.Error != "" {
+				// An expired session is not a refusal. reCAPTCHA gives a
+				// challenge a couple of minutes, and a grid answered over
+				// several rounds can outlive that — the page's own remedy is
+				// the "please try again" the widget offers, which is a reset
+				// and a fresh checkbox. Do that instead of reporting a failure
+				// the browser has not actually hit.
+				if s.Error == errExpired && resets < maxResets {
+					var ok bool
+					if err := chromedp.Run(tabCtx, chromedp.Evaluate(resetScript, &ok)); err != nil || !ok {
+						return nil, fmt.Errorf("solver: %s error %s%s",
+							req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
+					}
+					resets++
+					clicks, attempts = 0, 0
+					lastClick = time.Time{}
+					log.Info("the challenge expired, starting it over", "resets", resets)
+					continue
+				}
 				return nil, fmt.Errorf("solver: %s error %s%s",
 					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
 			}
