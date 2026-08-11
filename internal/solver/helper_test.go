@@ -10,6 +10,13 @@ import (
 	"github.com/mikketa/postern/internal/display"
 )
 
+// Google's own reCAPTCHA v2 demo, which is where a live challenge can be asked
+// for without bothering anybody else's site.
+const (
+	demoV2URL = "https://www.google.com/recaptcha/api2/demo"
+	demoV2Key = "6Le-wvkSAAAAAPBMRTvw0Q4Muexq9bi0DJwx_mJ-"
+)
+
 // newVirtualTab opens a tab on a windowed Chrome running on a virtual display,
 // which is how postern actually runs.
 func newVirtualTab(t *testing.T) (context.Context, func()) {
