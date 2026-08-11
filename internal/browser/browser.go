@@ -186,11 +186,29 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
 		cancel()
 	}
 
-	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), installPatches()); err != nil {
+	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), bypassCSP(), installPatches()); err != nil {
 		closeTab()
 		return nil, nil, fmt.Errorf("browser: open tab: %w", err)
 	}
 	return tabCtx, closeTab, nil
+}
+
+// bypassCSP lets postern render its own widget on pages that forbid it.
+//
+// Postern solves a challenge by putting the vendor's widget on the target page
+// itself, which means loading the vendor's script — and a page's content
+// security policy is entitled to refuse. Sites that use reCAPTCHA naturally
+// allow Google's script and never notice this; sites that use one vendor and
+// are asked for another refuse outright, and postern would report
+// "api-script-blocked" for a page it can plainly reach.
+//
+// The relaxation is invisible to the page: it is applied by the browser to our
+// own session, not written into the document, and nothing about the origin,
+// referrer or request the vendor sees changes.
+func bypassCSP() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		return page.SetBypassCSP(true).Do(ctx)
+	})
 }
 
 // sizeWindow resizes the tab's window after the fact.
