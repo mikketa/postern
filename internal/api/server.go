@@ -18,21 +18,25 @@ type Server struct {
 	timeout time.Duration
 	log     *slog.Logger
 
+	// imageSolver is passed to every solve; see internal/challenge.
+	imageSolver string
+
 	// slots caps how many tabs solve at once. One Chrome with a dozen tabs
 	// grinding challenges is both slow and conspicuous.
 	slots chan struct{}
 }
 
 // New builds a Server. maxConcurrent below 1 is treated as 1.
-func New(b *browser.Browser, timeout time.Duration, maxConcurrent int, log *slog.Logger) *Server {
+func New(b *browser.Browser, timeout time.Duration, maxConcurrent int, imageSolver string, log *slog.Logger) *Server {
 	if maxConcurrent < 1 {
 		maxConcurrent = 1
 	}
 	return &Server{
-		browser: b,
-		timeout: timeout,
-		log:     log,
-		slots:   make(chan struct{}, maxConcurrent),
+		browser:     b,
+		timeout:     timeout,
+		imageSolver: imageSolver,
+		log:         log,
+		slots:       make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -83,11 +87,12 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := solver.Solve(r.Context(), s.browser, solver.Request{
-		Kind:    solver.Kind(req.Kind),
-		URL:     req.URL,
-		SiteKey: req.SiteKey,
-		Action:  req.Action,
-		CData:   req.CData,
+		Kind:        solver.Kind(req.Kind),
+		URL:         req.URL,
+		SiteKey:     req.SiteKey,
+		Action:      req.Action,
+		CData:       req.CData,
+		ImageSolver: s.imageSolver,
 	}, timeout)
 	if err != nil {
 		// A client that walked away is not a solver failure worth logging.

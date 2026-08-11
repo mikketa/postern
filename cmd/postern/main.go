@@ -119,6 +119,8 @@ func runServe(args []string) error {
 	addr := fs.String("addr", "127.0.0.1:8099", "address to listen on")
 	timeout := fs.Duration("timeout", 60*time.Second, "default per-solve timeout")
 	concurrency := fs.Int("concurrency", 2, "solves running at the same time")
+	imageSolver := fs.String("image-solver", "",
+		"command answering picture grids: it receives a PNG path and prints one x,y per line")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -139,7 +141,7 @@ func runServe(args []string) error {
 
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: api.New(b, *timeout, *concurrency, log).Handler(),
+		Handler: api.New(b, *timeout, *concurrency, *imageSolver, log).Handler(),
 	}
 
 	errc := make(chan error, 1)
@@ -170,6 +172,8 @@ func runSolve(args []string) error {
 		"challenge kind: "+strings.Join(solver.Kinds(), ", "))
 	action := fs.String("action", "", "action parameter, if the site sets one")
 	cdata := fs.String("cdata", "", "Turnstile cData parameter, if the site sets one")
+	imageSolver := fs.String("image-solver", "",
+		"command answering picture grids: it receives a PNG path and prints one x,y per line")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -191,11 +195,12 @@ func runSolve(args []string) error {
 	defer closeBrowser()
 
 	result, err := solver.Solve(ctx, b, solver.Request{
-		Kind:    solver.Kind(*kind),
-		URL:     *url,
-		SiteKey: *sitekey,
-		Action:  *action,
-		CData:   *cdata,
+		Kind:        solver.Kind(*kind),
+		URL:         *url,
+		SiteKey:     *sitekey,
+		Action:      *action,
+		CData:       *cdata,
+		ImageSolver: *imageSolver,
 	}, *timeout)
 	if err != nil {
 		return err

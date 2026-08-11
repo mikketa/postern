@@ -15,6 +15,7 @@ import (
 
 	"github.com/chromedp/chromedp"
 	"github.com/mikketa/postern/internal/browser"
+	"github.com/mikketa/postern/internal/challenge"
 	"github.com/mikketa/postern/internal/input"
 )
 
@@ -36,10 +37,14 @@ const (
 	// clicks is not going to yield to a fourth.
 	maxClicks = 3
 
-	// blockedAfter is how long a challenge panel must have been up before we
-	// call it a wall rather than a verification in progress. It sits well past
-	// interactiveAfter so the click has had its chance to be accepted.
-	blockedAfter = 9 * time.Second
+	// panelAfter is how long to wait before treating an open panel as a real
+	// challenge. It sits well past interactiveAfter so an ordinary
+	// verification has had its chance to complete first.
+	panelAfter = 9 * time.Second
+
+	// maxPanels bounds how many grids we answer in one solve. reCAPTCHA will
+	// hand out fresh ones indefinitely to a client it does not believe.
+	maxPanels = 3
 
 	// clickRetryAfter is the wait before clicking again. The vendor takes a
 	// moment to process a click, and clicking through that looks like a bot
@@ -66,6 +71,11 @@ type Request struct {
 
 	// CData is Turnstile's optional customer data field.
 	CData string
+
+	// ImageSolver is the command that answers picture grids. Empty means
+	// picture challenges are reported rather than attempted; see
+	// internal/challenge for what the command receives and must print.
+	ImageSolver string
 }
 
 // Result is a solved challenge.
@@ -119,6 +129,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	defer ticker.Stop()
 
 	clicks := 0
+	attempts := 0
 	var lastClick time.Time
 
 	for {
@@ -146,11 +157,28 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			}
 
 			// Give the panel a moment to settle: reCAPTCHA flashes it open
-			// during an ordinary verification too, and calling that a block
-			// would fail solves that were about to succeed.
-			if p.blockedBy != "" && time.Since(start) >= blockedAfter && blocked(tabCtx, p.blockedBy) {
-				return nil, errors.New("solver: an image challenge was served, " +
-					"which this solver cannot answer — see the README on reputation")
+			// during an ordinary verification too, and treating that as a
+			// challenge would derail solves that were about to succeed.
+			if p.panelBy != "" && time.Since(start) >= panelAfter && attempts < maxPanels {
+				panel := findPanel(tabCtx, p.panelBy)
+				if panel != nil {
+					if req.ImageSolver == "" {
+						return nil, errors.New("solver: an image challenge was served and no " +
+							"image solver is configured — see -image-solver in the README")
+					}
+
+					attempts++
+					if err := challenge.Solve(tabCtx, challenge.Panel{
+						X: panel.X, Y: panel.Y, W: panel.W, H: panel.H,
+					}, req.ImageSolver); err != nil {
+						return nil, fmt.Errorf("solver: %w", err)
+					}
+
+					// The verdict is not ours to read: a right answer produces
+					// a token on the next poll, a wrong one produces another
+					// grid, and either way the loop finds out.
+					lastClick = time.Now()
+				}
 			}
 
 			// An interactive challenge sits there until someone ticks the box.
@@ -174,14 +202,14 @@ func (r Request) kindOrDefault() Kind {
 	return r.Kind
 }
 
-// blocked reports whether the vendor has put up something unanswerable. A
-// failed evaluation is not a block: the page may simply be mid-navigation.
-func blocked(ctx context.Context, script string) bool {
-	var yes bool
-	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &yes)); err != nil {
-		return false
+// findPanel returns the challenge panel's geometry, or nil when none is up. A
+// failed evaluation is not a panel: the page may simply be mid-navigation.
+func findPanel(ctx context.Context, script string) *rect {
+	var box *rect
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &box)); err != nil {
+		return nil
 	}
-	return yes
+	return box
 }
 
 // readyToClick decides whether this tick should click: never before the widget
