@@ -93,6 +93,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		Action:      req.Action,
 		CData:       req.CData,
 		ImageSolver: s.imageSolver,
+		Log:         s.log.With("url", req.URL),
 	}, timeout)
 	if err != nil {
 		// A client that walked away is not a solver failure worth logging.

@@ -175,6 +175,7 @@ func runSolve(args []string) error {
 	imageSolver := fs.String("image-solver", "",
 		"command answering picture grids: it receives a PNG path and prints one x,y per line")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
+	verbose := fs.Bool("v", false, "report what the challenge did, on stderr")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -194,14 +195,19 @@ func runSolve(args []string) error {
 	}
 	defer closeBrowser()
 
-	result, err := solver.Solve(ctx, b, solver.Request{
+	req := solver.Request{
 		Kind:        solver.Kind(*kind),
 		URL:         *url,
 		SiteKey:     *sitekey,
 		Action:      *action,
 		CData:       *cdata,
 		ImageSolver: *imageSolver,
-	}, *timeout)
+	}
+	if *verbose {
+		req.Log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+
+	result, err := solver.Solve(ctx, b, req, *timeout)
 	if err != nil {
 		return err
 	}
