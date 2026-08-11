@@ -40,10 +40,11 @@ func TestChallengeIsReadableFromTheInside(t *testing.T) {
 		t.Fatalf("click checkbox: %v", err)
 	}
 
+	panels := challenge.NewFinder()
 	var panel *challenge.Frame
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if panel, _ = challenge.Find(tabCtx); panel != nil {
+		if panel, _ = panels.Find(tabCtx); panel != nil {
 			break
 		}
 		time.Sleep(time.Second)

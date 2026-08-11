@@ -177,8 +177,11 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
 
 	tabCtx, cancel := chromedp.NewContext(b.browserCtx, chromedp.WithTargetID(targetID))
 
-	// chromedp does not close a target it was merely attached to, so the
-	// window is ours to clean up.
+	// The window is ours to clean up. chromedp's own cancel would do it, but
+	// only as a side effect of tearing the attachment down — and that same
+	// behaviour is why a context attached to a *frame's* target must never be
+	// cancelled: closing a frame target closes the page holding it. See
+	// challenge.Finder.
 	closeTab := func() {
 		// The browser may already be gone, in which case there is nothing left
 		// to close and the error is not interesting.

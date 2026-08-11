@@ -3,8 +3,10 @@ package challenge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
@@ -26,6 +28,10 @@ const frameMarker = "/recaptcha/api2/bframe"
 // it anyway gets a picture of whatever the page has there instead, which is
 // what a solver would then be asked to find buses in.
 const minPanelHeight = 250
+
+// attachTimeout bounds reaching a frame in another process. Attaching is
+// normally instant; when it is not, the solve loop must not be held up by it.
+const attachTimeout = 8 * time.Second
 
 // readScript asks the challenge document to describe itself. Reading rather
 // than acting: nothing here clicks, focuses or dispatches anything, so the
@@ -82,8 +88,13 @@ const readScript = `(() => {
       // the difference between where the button is and where it can be hit.
       hittable: (() => {
         const r = verify.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return false;
+
         const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-        return !!at && (at === verify || verify.contains(at) || at.contains(verify));
+        // The button itself, or something drawn inside it. An *ancestor* means
+        // the click would land on the container instead — which is exactly the
+        // clipped case, and the one worth catching.
+        return !!at && (at === verify || verify.contains(at));
       })(),
     } : null,
     notice,
@@ -94,6 +105,27 @@ const readScript = `(() => {
     width: window.innerWidth,
     height: window.innerHeight,
   });
+})()`
+
+// openPanelScript reports whether any challenge frame in the host page is
+// actually deployed. reCAPTCHA keeps a collapsed one around for every widget —
+// 300x150, parked out of the way — and grows it only when a challenge is
+// served.
+//
+// It exists to keep the expensive route cheap. Reaching a cross-origin frame
+// means attaching to its target, and the solve loop asks for the panel five
+// times a second: attaching, reading and detaching at that rate is both slow
+// and a good way to end up waiting on a target that is already attached. This
+// question can be answered from the host page for nothing, and answers "no"
+// almost every time.
+const openPanelScript = `(() => {
+  for (const frame of document.querySelectorAll('iframe')) {
+    if (!(frame.src || '').includes('%s')) continue;
+
+    const r = frame.getBoundingClientRect();
+    if (r.width > 100 && r.height > %d) return true;
+  }
+  return false;
 })()`
 
 // hostFrameScript finds where a frame's element sits in the page it belongs to.
@@ -201,7 +233,6 @@ type Frame struct {
 	// a context attached to the frame's own target.
 	runCtx context.Context
 	world  runtime.ExecutionContextID
-	cancel context.CancelFunc
 
 	// locate re-measures where the frame sits, because it moves: reCAPTCHA
 	// slides the panel in and out and a position taken one round ago is not
@@ -226,11 +257,29 @@ func (f *Frame) Point(x, y float64) (float64, float64) {
 	return f.OriginX + x, f.OriginY + y
 }
 
-// Close releases the attachment, if there was one.
-func (f *Frame) Close() {
-	if f.cancel != nil {
-		f.cancel()
-	}
+// Finder locates challenge panels in one tab, and remembers what it had to
+// attach to in order to do it.
+//
+// The remembering is not an optimisation. Reaching a frame in another process
+// means attaching to its target, and chromedp tears an attachment down by
+// closing the target — which for a frame means closing the page that holds it.
+// Attaching and detaching on each poll would therefore shut the tab, five times
+// a second, on any site but Google's own. So an attachment is made once and
+// kept for the life of the tab, and released only when the tab itself goes: the
+// contexts descend from it, and closing the tab takes them with it.
+type Finder struct {
+	attached map[target.ID]*attachment
+}
+
+// attachment is a session inside a frame that lives in its own process.
+type attachment struct {
+	ctx   context.Context
+	world runtime.ExecutionContextID
+}
+
+// NewFinder returns a finder for one tab. It must not outlive that tab.
+func NewFinder() *Finder {
+	return &Finder{attached: make(map[target.ID]*attachment)}
 }
 
 // Find returns the challenge panel, or nil when no challenge is up. A bframe
@@ -244,7 +293,7 @@ func (f *Frame) Close() {
 // browser. On Google's own demo the frame is same-site and only the first route
 // finds it; on everybody else's site only the second one does. Postern has to
 // work on everybody else's site.
-func Find(ctx context.Context) (*Frame, error) {
+func (f *Finder) Find(ctx context.Context) (*Frame, error) {
 	frame, err := findLocal(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("challenge: find panel: %w", err)
@@ -253,11 +302,37 @@ func Find(ctx context.Context) (*Frame, error) {
 		return frame, nil
 	}
 
-	frame, err = findAttached(ctx)
+	// Nothing in this session's own frames. Before going the long way round,
+	// ask the page whether a panel is deployed at all — a question it answers
+	// for nothing, and answers "no" almost every time.
+	open, err := panelIsOpen(ctx)
+	if err != nil || !open {
+		return nil, err
+	}
+
+	frame, err = f.findAttached(ctx)
 	if err != nil {
+		// An attachment that times out costs one poll; treating it as a failure
+		// would cost the run.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("challenge: find panel: %w", err)
 	}
 	return frame, nil
+}
+
+// panelIsOpen reports whether the host page is showing a deployed challenge
+// frame.
+func panelIsOpen(ctx context.Context) (bool, error) {
+	var open bool
+
+	script := fmt.Sprintf(openPanelScript, frameMarker, int(minPanelHeight))
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &open)); err != nil {
+		// Mid-navigation, or no document yet. Not a panel, and not a failure.
+		return false, nil
+	}
+	return open, nil
 }
 
 // findLocal looks through the frames the page's own session can see.
@@ -304,7 +379,7 @@ func findLocal(outer context.Context) (*Frame, error) {
 
 // findAttached looks through the browser's targets, which is where a frame in
 // a process of its own turns up.
-func findAttached(ctx context.Context) (*Frame, error) {
+func (f *Finder) findAttached(ctx context.Context) (*Frame, error) {
 	var candidates []*target.Info
 
 	err := chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -324,25 +399,19 @@ func findAttached(ctx context.Context) (*Frame, error) {
 	}
 
 	for _, info := range candidates {
-		frameCtx, cancel := chromedp.NewContext(ctx, chromedp.WithTargetID(info.TargetID))
+		session, err := f.attach(ctx, info.TargetID)
+		if err != nil {
+			return nil, err
+		}
 
-		var view View
-		var world runtime.ExecutionContextID
-		err := chromedp.Run(frameCtx, chromedp.ActionFunc(func(fctx context.Context) error {
-			tree, err := page.GetFrameTree().Do(fctx)
-			if err != nil {
-				return err
-			}
-
-			world, err = page.CreateIsolatedWorld(tree.Frame.ID).WithWorldName("postern").Do(fctx)
-			if err != nil {
-				return err
-			}
-			view, err = readWorld(fctx, world)
-			return err
-		}))
-		if err != nil || len(view.Tiles) == 0 || view.Height < minPanelHeight {
-			cancel()
+		view, err := readIn(ctx, session)
+		if err != nil {
+			// The world goes stale when the frame navigates, which it does
+			// between challenges. Drop it and let the next poll make another.
+			delete(f.attached, info.TargetID)
+			continue
+		}
+		if len(view.Tiles) == 0 || view.Height < minPanelHeight {
 			continue
 		}
 
@@ -353,13 +422,60 @@ func findAttached(ctx context.Context) (*Frame, error) {
 
 		x, y, err := locate(ctx)
 		if err != nil {
-			cancel()
 			continue
 		}
-		return &Frame{runCtx: frameCtx, world: world, cancel: cancel, locate: locate,
+		return &Frame{runCtx: session.ctx, world: session.world, locate: locate,
 			OriginX: x, OriginY: y, View: view}, nil
 	}
 	return nil, nil
+}
+
+// attach opens a session inside a frame's own target, or returns the one it
+// already has. The context it builds is never cancelled here — see Finder.
+func (f *Finder) attach(ctx context.Context, id target.ID) (*attachment, error) {
+	if session, ok := f.attached[id]; ok {
+		return session, nil
+	}
+
+	// chromedp.NewContext hands back a cancel that closes the target, which for
+	// a frame closes the page. It is deliberately dropped: this context is
+	// released by the tab context it descends from.
+	frameCtx, _ := chromedp.NewContext(ctx, chromedp.WithTargetID(id))
+
+	// Bounded, because an attachment that hangs must not hold up the solve. The
+	// deadline applies to getting attached, not to the session afterwards.
+	deadline, stop := context.WithTimeout(frameCtx, attachTimeout)
+	defer stop()
+
+	var world runtime.ExecutionContextID
+	err := chromedp.Run(deadline, chromedp.ActionFunc(func(fctx context.Context) error {
+		tree, err := page.GetFrameTree().Do(fctx)
+		if err != nil {
+			return err
+		}
+
+		world, err = page.CreateIsolatedWorld(tree.Frame.ID).WithWorldName("postern").Do(fctx)
+		return err
+	}))
+	if err != nil {
+		return nil, err
+	}
+
+	session := &attachment{ctx: frameCtx, world: world}
+	f.attached[id] = session
+	return session, nil
+}
+
+// readIn takes a measurement through an attached session.
+func readIn(ctx context.Context, session *attachment) (View, error) {
+	var view View
+
+	err := chromedp.Run(session.ctx, chromedp.ActionFunc(func(fctx context.Context) error {
+		var err error
+		view, err = readWorld(fctx, session.world)
+		return err
+	}))
+	return view, err
 }
 
 // Open reports whether the panel is still showing a challenge.
@@ -378,7 +494,7 @@ const focusScript = `(() => {
 // Focus puts the keyboard on the panel's button. Focusing is not clicking: it
 // moves the caret, it does not fire the activation, so what follows is still a
 // real keystroke from the browser rather than an event made up by script.
-func (f *Frame) Focus(ctx context.Context, selector string) (bool, error) {
+func (f *Frame) Focus(selector string) (bool, error) {
 	var focused bool
 
 	err := chromedp.Run(f.runCtx, chromedp.ActionFunc(func(fctx context.Context) error {

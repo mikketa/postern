@@ -43,15 +43,15 @@ func TestVerifyReachesTheButton(t *testing.T) {
 		t.Fatalf("click checkbox: %v", err)
 	}
 
+	panels := challenge.NewFinder()
 	var panel *challenge.Frame
 	for i := 0; i < 25 && panel == nil; i++ {
 		time.Sleep(time.Second)
-		panel, _ = challenge.Find(tabCtx)
+		panel, _ = panels.Find(tabCtx)
 	}
 	if panel == nil {
 		t.Skip("no picture challenge was served this run")
 	}
-	defer panel.Close()
 
 	t.Logf("panel %.0fx%.0f, document %.0f tall, button %+v",
 		panel.View.Width, panel.View.Height, panel.View.DocHeight, panel.View.Button)

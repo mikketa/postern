@@ -36,7 +36,7 @@ func TestChallengeFrameIsReachableAcrossOrigins(t *testing.T) {
 	tabCtx, done := newVirtualTab(t)
 	defer done()
 
-	const host = "https://piread.org/"
+	const host = "https://example.com/"
 	bootstrap, err := recaptchaV2Bootstrap(Request{URL: host, SiteKey: testKey})
 	if err != nil {
 		t.Fatalf("bootstrap script: %v", err)
@@ -101,7 +101,10 @@ func TestChallengeFrameIsReachableAcrossOrigins(t *testing.T) {
 				continue
 			}
 
-			frameCtx, cancel := chromedp.NewContext(tabCtx, chromedp.WithTargetID(info.TargetID))
+			// The cancel is deliberately dropped: chromedp tears an attachment
+			// down by closing the target, and closing a frame's target closes
+			// the page holding it. The tab context releases this one.
+			frameCtx, _ := chromedp.NewContext(tabCtx, chromedp.WithTargetID(info.TargetID))
 			err := chromedp.Run(frameCtx, chromedp.ActionFunc(func(fctx context.Context) error {
 				tree, err := page.GetFrameTree().Do(fctx)
 				if err != nil {
@@ -126,7 +129,6 @@ func TestChallengeFrameIsReachableAcrossOrigins(t *testing.T) {
 				}
 				return nil
 			}))
-			cancel()
 			if err != nil {
 				t.Logf("frame target %s: %v", info.TargetID, err)
 			}
@@ -145,11 +147,7 @@ func TestChallengeFrameIsReachableAcrossOrigins(t *testing.T) {
 	// And the real entry point should survive the same page without complaint.
 	// It finds nothing here — the test key serves no challenge — but "nothing"
 	// and "error" are different answers and only one of them is acceptable.
-	panel, err := challenge.Find(tabCtx)
-	if err != nil {
+	if _, err := challenge.NewFinder().Find(tabCtx); err != nil {
 		t.Errorf("Find: %v", err)
-	}
-	if panel != nil {
-		panel.Close()
 	}
 }

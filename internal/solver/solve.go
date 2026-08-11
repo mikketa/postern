@@ -145,6 +145,10 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	// One finder for the tab: reaching a challenge frame in another process
+	// means attaching to it, and that attachment is worth keeping.
+	panels := challenge.NewFinder()
+
 	clicks := 0
 	attempts := 0
 	var lastClick time.Time
@@ -180,20 +184,18 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// empty one around for every widget and flashes it open during
 			// ordinary verifications too, so its mere presence proves nothing.
 			if p.images && time.Since(start) >= panelAfter && attempts < maxPanels {
-				panel, err := challenge.Find(tabCtx)
+				panel, err := panels.Find(tabCtx)
 				if err != nil {
 					continue
 				}
 				if panel != nil {
 					if req.ImageSolver == "" {
-						panel.Close()
 						return nil, errors.New("solver: an image challenge was served and no " +
 							"image solver is configured — see -image-solver in the README")
 					}
 
 					attempts++
 					err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
-					panel.Close()
 					if errors.Is(err, context.DeadlineExceeded) {
 						// Running out of time mid-challenge is the same failure
 						// as running out of time waiting, and reads better said
