@@ -11,6 +11,7 @@ package input
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -18,6 +19,33 @@ import (
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/chromedp"
 )
+
+// dispatchTimeout bounds the wait for Chrome to acknowledge one input event.
+//
+// The event is delivered when the command is sent. The reply comes back only
+// once the renderer under the pointer has processed it, and a renderer busy
+// with a challenge — or one drawing to a virtual display — takes its time:
+// measured at 43 seconds for a single click on a page with one link on it,
+// while that same page answered every other command instantly.
+//
+// A solve is dozens of clicks along a path of dozens of moves, so waiting on
+// each acknowledgement is the difference between three seconds and three
+// minutes. Nothing is gained by it: what postern needs to know about the click
+// is whether the page changed, which it reads from the page afterwards.
+const dispatchTimeout = 25 * time.Millisecond
+
+// send dispatches one input event without waiting indefinitely for the reply.
+func send(ctx context.Context, action chromedp.Action) error {
+	bounded, cancel := context.WithTimeout(ctx, dispatchTimeout)
+	defer cancel()
+
+	err := action.Do(bounded)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		// Sent, not acknowledged. That is the busy renderer, not a failure.
+		return nil
+	}
+	return err
+}
 
 // Point is a viewport coordinate, in CSS pixels.
 type Point struct {
@@ -40,7 +68,7 @@ func Click(from, to Point) chromedp.ActionFunc {
 		press := input.DispatchMouseEvent(input.MousePressed, to.X, to.Y).
 			WithButton(input.Left).
 			WithClickCount(1)
-		if err := press.Do(ctx); err != nil {
+		if err := send(ctx, press); err != nil {
 			return err
 		}
 
@@ -52,7 +80,7 @@ func Click(from, to Point) chromedp.ActionFunc {
 		release := input.DispatchMouseEvent(input.MouseReleased, to.X, to.Y).
 			WithButton(input.Left).
 			WithClickCount(1)
-		return release.Do(ctx)
+		return send(ctx, release)
 	}
 }
 
@@ -78,7 +106,7 @@ func move(ctx context.Context, from, to Point) error {
 			p.Y += (rand.Float64() - 0.5) * 1.4
 		}
 
-		if err := input.DispatchMouseEvent(input.MouseMoved, p.X, p.Y).Do(ctx); err != nil {
+		if err := send(ctx, input.DispatchMouseEvent(input.MouseMoved, p.X, p.Y)); err != nil {
 			return err
 		}
 		if err := Pause(ctx, 6, 20); err != nil {
@@ -163,7 +191,7 @@ func PressEnter(ctx context.Context) error {
 		if kind == input.KeyChar {
 			ev = ev.WithText("\r")
 		}
-		if err := ev.Do(ctx); err != nil {
+		if err := send(ctx, ev); err != nil {
 			return err
 		}
 		if err := Pause(ctx, 20, 60); err != nil {
