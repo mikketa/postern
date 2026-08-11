@@ -97,6 +97,10 @@ const (
 	loadWaitMax  = 600
 	loadAttempts = 14
 
+	// maxPasses is how many refusals in a row to accept before reporting that
+	// this solver and this challenge are not going to agree.
+	maxPasses = 3
+
 	// pointerAttempts is how long to wait for a pointer submission to register
 	// before falling back to the keyboard.
 	pointerAttempts = 3
@@ -130,6 +134,8 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		return fmt.Errorf("challenge: no image solver configured")
 	}
 
+	passes := 0
+
 	for round := 0; round < maxRounds; round++ {
 		// The panel closes the moment the challenge is over, either because it
 		// was answered or because the widget gave up on it. Carrying on would
@@ -152,12 +158,25 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 
 		points, err := inspect(ctx, frame, solverCmd)
 		if errors.Is(err, errPass) {
-			log.Info("solver passed, asking for another challenge")
+			// Reloading asks for a different challenge, but reCAPTCHA is under
+			// no obligation to change the subject and often does not: it has
+			// decided to ask about crosswalks and it will keep asking. Giving
+			// up quickly beats burning the whole timeout on a category the
+			// solver has already said it cannot answer.
+			passes++
+			if passes >= maxPasses {
+				return fmt.Errorf("challenge: the solver has passed on %q %d times running "+
+					"and reCAPTCHA keeps asking — it needs a model that answers this one",
+					frame.View.Prompt, passes)
+			}
+
+			log.Info("solver passed, asking for another challenge", "passes", passes)
 			if reloadErr := reload(ctx, frame, before); reloadErr != nil {
 				return reloadErr
 			}
 			continue
 		}
+		passes = 0
 		if err != nil {
 			return err
 		}
