@@ -221,6 +221,20 @@ func (v View) Columns() int {
 	}
 }
 
+// TileAt is the tile a point falls in, or nil for a point between tiles or
+// outside the grid. It is how a solver's answer is matched back to what the
+// panel already shows there — a tile is a toggle, and clicking a ticked one
+// unticks it.
+func (v View) TileAt(x, y float64) *Box {
+	for i := range v.Tiles {
+		t := &v.Tiles[i]
+		if x >= t.X && x < t.X+t.W && y >= t.Y && y < t.Y+t.H {
+			return t
+		}
+	}
+	return nil
+}
+
 // Pictures lists the tiles' images, for telling one round from the next.
 func (v View) Pictures() []string {
 	srcs := make([]string, len(v.Tiles))

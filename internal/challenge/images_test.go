@@ -157,3 +157,58 @@ func TestLastLines(t *testing.T) {
 		t.Errorf("lastLines = %q, want %q", got, "three; four")
 	}
 }
+
+// TestTileAtFindsWhatIsUnderAPoint covers the lookup that keeps postern from
+// unticking its own answers. A tile is a toggle: clicking one that is already
+// ticked clears it, and a solver that names the same correct tile every round
+// would otherwise have postern alternate between selecting and deselecting it
+// until the rounds ran out.
+func TestTileAtFindsWhatIsUnderAPoint(t *testing.T) {
+	// Two tiles side by side, 100x100, the second one ticked.
+	view := View{
+		Width:  200,
+		Height: 100,
+		Tiles: []Box{
+			{X: 0, Y: 0, W: 100, H: 100},
+			{X: 100, Y: 0, W: 100, H: 100, Selected: true},
+		},
+	}
+
+	cases := []struct {
+		name     string
+		x, y     float64
+		wantTile int // index, or -1 for none
+	}{
+		{"middle of the first", 50, 50, 0},
+		{"middle of the second", 150, 50, 1},
+		{"top left corner belongs to its tile", 0, 0, 0},
+		{"the boundary belongs to the tile it starts", 100, 0, 1},
+		{"past the last tile", 200, 50, -1},
+		{"below the grid", 50, 150, -1},
+		{"negative", -1, 50, -1},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := view.TileAt(c.x, c.y)
+			if c.wantTile < 0 {
+				if got != nil {
+					t.Errorf("point %.0f,%.0f matched a tile at %.0f,%.0f", c.x, c.y, got.X, got.Y)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("point %.0f,%.0f matched no tile", c.x, c.y)
+			}
+			if want := &view.Tiles[c.wantTile]; got != want {
+				t.Errorf("point %.0f,%.0f matched the tile at %.0f, wanted the one at %.0f",
+					c.x, c.y, got.X, want.X)
+			}
+		})
+	}
+
+	// The whole point of the lookup.
+	if tile := view.TileAt(150, 50); tile == nil || !tile.Selected {
+		t.Error("a point on a ticked tile has to come back ticked, or postern clicks it off")
+	}
+}

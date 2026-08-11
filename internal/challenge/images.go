@@ -208,6 +208,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			continue
 		}
 
+		clicked := 0
 		for _, p := range points {
 			// A solver is somebody else's script, and a click outside the panel
 			// lands on the target page — on a link, say, which navigates away
@@ -218,19 +219,36 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 					"%.0fx%.0f panel it was given", p.X, p.Y, frame.View.Width, frame.View.Height)
 			}
 
+			// A tile is a toggle, so clicking one that is already ticked
+			// unticks it. On a dynamic grid that is a loop with no exit: the
+			// solver names the same tile every round because it is still the
+			// right answer, and postern alternates between selecting and
+			// deselecting it until the rounds run out. Seen on a bridge
+			// challenge that spent all six rounds on tile 6.
+			//
+			// Naming a ticked tile means the solver agrees with what is
+			// already there. Leave it alone.
+			if tile := frame.View.TileAt(p.X, p.Y); tile != nil && tile.Selected {
+				continue
+			}
+
 			if err := click(ctx, frame, p.X, p.Y); err != nil {
 				return fmt.Errorf("challenge: click tile: %w", err)
 			}
+			clicked++
 			if err := input.Pause(ctx, betweenClicksMin, betweenClicksMax); err != nil {
 				return err
 			}
+		}
+		if clicked < len(points) {
+			log.Info("kept tiles the solver named again", "clicked", clicked, "named", len(points))
 		}
 
 		// A dynamic grid swaps every correct tile for a fresh picture, and is
 		// only finished when nothing on screen matches any more. Submitting
 		// before then is a half-answer, which reCAPTCHA rejects as surely as a
 		// wrong one — so go round again and look at what replaced them.
-		if len(points) > 0 {
+		if clicked > 0 {
 			replaced, err := await(ctx, frame, before, replaceAttempts)
 			if err != nil {
 				return err
