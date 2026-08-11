@@ -191,23 +191,6 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		}
 		log.Info("solver answered", "tiles", len(points))
 
-		// An empty answer is an answer, not a failure: reCAPTCHA's own
-		// instructions say to press the button when none of the pictures match,
-		// and a dynamic grid ends exactly that way.
-		//
-		// Unless the panel has already complained about this grid. Submitting
-		// nothing to a challenge that just said "check the new images too" is
-		// resubmitting the answer it has already refused, and the round after
-		// that is the same one again. Ask for a different grid instead.
-		if len(points) == 0 && frame.View.Notice != "" {
-			log.Info("nothing found on a grid already refused, asking for another",
-				"notice", frame.View.Notice)
-			if err := reload(ctx, frame, before); err != nil {
-				return err
-			}
-			continue
-		}
-
 		clicked := 0
 		for _, p := range points {
 			// A solver is somebody else's script, and a click outside the panel
@@ -242,6 +225,28 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		}
 		if clicked < len(points) {
 			log.Info("kept tiles the solver named again", "clicked", clicked, "named", len(points))
+		}
+
+		// An empty answer is an answer, not a failure: reCAPTCHA's own
+		// instructions say to press the button when none of the pictures match,
+		// and a dynamic grid ends exactly that way.
+		//
+		// Unless the panel has already complained about this grid. Submitting
+		// without having changed anything, to a challenge that just said "check
+		// the new images too", is resubmitting the answer it has already
+		// refused — and the round after that is the same one again. Ask for a
+		// different grid instead.
+		//
+		// This keys off clicks rather than coordinates: a solver naming only
+		// tiles that are already ticked has changed nothing, whatever it
+		// returned.
+		if clicked == 0 && frame.View.Notice != "" {
+			log.Info("nothing new on a grid already refused, asking for another",
+				"notice", frame.View.Notice, "named", len(points))
+			if err := reload(ctx, frame, before); err != nil {
+				return err
+			}
+			continue
 		}
 
 		// A dynamic grid swaps every correct tile for a fresh picture, and is
