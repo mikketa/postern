@@ -56,6 +56,10 @@ type Options struct {
 
 	// Proxy is passed to --proxy-server, e.g. "http://user:pass@host:port".
 	Proxy string
+
+	// Env adds environment entries for the Chrome process, which is how a
+	// windowed browser is pointed at a virtual display.
+	Env []string
 }
 
 // Browser owns a Chrome process and hands out tabs.
@@ -112,6 +116,9 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 	}
 	if opts.Proxy != "" {
 		flags = append(flags, chromedp.ProxyServer(opts.Proxy))
+	}
+	if len(opts.Env) > 0 {
+		flags = append(flags, chromedp.Env(opts.Env...))
 	}
 
 	allocCtx, cancel := chromedp.NewExecAllocator(ctx, flags...)

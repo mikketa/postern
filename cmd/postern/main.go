@@ -19,6 +19,7 @@ import (
 
 	"github.com/mikketa/postern/internal/api"
 	"github.com/mikketa/postern/internal/browser"
+	"github.com/mikketa/postern/internal/display"
 	"github.com/mikketa/postern/internal/solver"
 )
 
@@ -57,16 +58,48 @@ func main() {
 	}
 }
 
-// browserFlags registers the flags every command shares. The screen size is
-// returned unparsed, since flag parsing has not run yet when this is called.
-func browserFlags(fs *flag.FlagSet) (*browser.Options, *string) {
+// browserFlags registers the flags every command shares. The screen size and
+// display mode come back unparsed, since flag parsing has not run yet when
+// this is called.
+func browserFlags(fs *flag.FlagSet) (*browser.Options, *string, *string) {
 	opts := &browser.Options{}
 	fs.StringVar(&opts.UserDataDir, "profile", defaultProfileDir(), "Chrome profile directory, kept across runs")
-	fs.BoolVar(&opts.Headless, "headless", true, "run without a window (-headless=false for a windowed browser)")
+	fs.BoolVar(&opts.Headless, "headless", false,
+		"run Chrome in headless mode — measurably more detectable; by default a windowed "+
+			"Chrome runs on a virtual display instead, which shows nothing on screen either")
 	screen := fs.String("screen", "1920x1080", "virtual screen size, WxH — the window is sized from it")
+	mode := fs.String("display", string(display.Virtual),
+		"where Chrome draws: virtual (an Xvfb of our own, nothing on screen) or host (your session, visible)")
 	fs.StringVar(&opts.ExecPath, "chrome", "", "path to the Chrome binary (default: autodetect)")
 	fs.StringVar(&opts.Proxy, "proxy", "", "proxy passed to Chrome, e.g. http://user:pass@host:port")
-	return opts, screen
+	return opts, screen, mode
+}
+
+// startBrowser gets Chrome running, with a screen for it to draw on unless the
+// caller asked for headless. Windowed Chrome on a virtual display is the
+// default because headless is refused by real challenges; see internal/display.
+func startBrowser(ctx context.Context, opts *browser.Options, mode display.Mode) (*browser.Browser, func(), error) {
+	var screen *display.Display
+
+	if !opts.Headless {
+		var err error
+		screen, err = display.Ensure(ctx, opts.ScreenWidth, opts.ScreenHeight, mode)
+		if err != nil {
+			return nil, nil, err
+		}
+		opts.Env = screen.Env()
+	}
+
+	b, err := browser.Launch(ctx, *opts)
+	if err != nil {
+		screen.Close()
+		return nil, nil, err
+	}
+
+	return b, func() {
+		b.Close()
+		screen.Close()
+	}, nil
 }
 
 // applyScreen parses a WxH string into the options.
@@ -81,7 +114,7 @@ func applyScreen(opts *browser.Options, screen string) error {
 
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	opts, screen := browserFlags(fs)
+	opts, screen, mode := browserFlags(fs)
 	addr := fs.String("addr", "127.0.0.1:8099", "address to listen on")
 	timeout := fs.Duration("timeout", 60*time.Second, "default per-solve timeout")
 	concurrency := fs.Int("concurrency", 2, "solves running at the same time")
@@ -97,11 +130,11 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	b, err := browser.Launch(ctx, *opts)
+	b, closeBrowser, err := startBrowser(ctx, opts, display.Mode(*mode))
 	if err != nil {
 		return err
 	}
-	defer b.Close()
+	defer closeBrowser()
 
 	srv := &http.Server{
 		Addr:    *addr,
@@ -129,7 +162,7 @@ func runServe(args []string) error {
 
 func runSolve(args []string) error {
 	fs := flag.NewFlagSet("solve", flag.ExitOnError)
-	opts, screen := browserFlags(fs)
+	opts, screen, mode := browserFlags(fs)
 	url := fs.String("url", "", "page the widget belongs to (required)")
 	sitekey := fs.String("sitekey", "", "Turnstile sitekey (required)")
 	action := fs.String("action", "", "Turnstile action parameter, if the site sets one")
@@ -148,11 +181,11 @@ func runSolve(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	b, err := browser.Launch(ctx, *opts)
+	b, closeBrowser, err := startBrowser(ctx, opts, display.Mode(*mode))
 	if err != nil {
 		return err
 	}
-	defer b.Close()
+	defer closeBrowser()
 
 	result, err := solver.Solve(ctx, b, solver.Request{
 		URL:     *url,
