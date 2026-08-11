@@ -36,6 +36,17 @@ Three decisions shape everything else:
 real binary, launched with `--disable-blink-features=AutomationControlled` and without
 the automation banner, reusing the same profile every run so it ages like a person's.
 
+It runs headless by default, and headless gives itself away in three specific places, so
+each one is corrected at the source rather than papered over in JavaScript:
+
+| Headless out of the box | Postern |
+| --- | --- |
+| `HeadlessChrome/151.0.0.0` in the user agent | the same UA with the token removed, read from the browser itself so it never goes stale |
+| WebGL renderer is `SwiftShader` — software rendering | GPU re-enabled, so it reports the real adapter |
+| `screen` is 800x600, and the viewport is exactly as tall as it | a real screen size, with a window shorter than the screen — no browser has zero UI |
+
+`internal/browser/fingerprint_test.go` asserts all three. They were measured, not guessed.
+
 **The widget is ours.** Postern renders a fresh Turnstile widget with the site's sitekey
 rather than hunting for the one on the page. Sites lay out their forms in a hundred
 different ways; the widget API is identical everywhere. It also means the widget sits at
@@ -124,7 +135,8 @@ time, so pass them when they are there.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-profile` | `~/.config/postern/profile` | Chrome profile directory, reused across runs |
-| `-headless` | `false` | Run without a window. Headless is still distinguishable — leave it off when you can |
+| `-headless` | `true` | Run without a window. `-headless=false` for a windowed browser |
+| `-screen` | `1920x1080` | Virtual screen size, `WxH`. The window is sized from it |
 | `-chrome` | autodetect | Path to the Chrome binary |
 | `-proxy` | none | Passed through to `--proxy-server` |
 | `-timeout` | `60s` | Give up on a challenge after this long |
@@ -158,6 +170,13 @@ curl -s https://challenges.cloudflare.com/turnstile/v0/siteverify \
 
 A green `"success": true` here means the whole chain works — browser, widget, callback,
 and a token Cloudflare's own endpoint accepts.
+
+There is also an integration test that launches a browser and checks what the page can
+see. It needs Chrome, so `go test -short ./...` skips it:
+
+```sh
+go test ./internal/browser/ -run TestHeadlessFingerprint -v
+```
 
 Rough timings against the dummy keys, headless, warm profile:
 
