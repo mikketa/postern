@@ -617,6 +617,13 @@ func ask(ctx context.Context, solverCmd, imagePath string, view View) ([]point, 
 
 	out, err := cmd.Output()
 	if err != nil {
+		// Running out of time kills the solver mid-look, and "signal: killed"
+		// reads like the solver crashed. It is the caller's own deadline, and
+		// it is worth saying so — the caller turns this into "no token after".
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("challenge: out of time while the solver was looking: %w", ctxErr)
+		}
+
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			if exit.ExitCode() == passExitCode {
