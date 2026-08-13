@@ -15,19 +15,36 @@
 package display
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 )
 
-// startupTimeout bounds the wait for Xvfb to report the display it took.
+// startupTimeout bounds the wait for Xvfb to start answering on its display.
 const startupTimeout = 5 * time.Second
+
+// firstDisplay is where the search for a free display number starts. The low
+// numbers are where real sessions live, and an X server handed a number that is
+// already taken does not reliably step aside: finding a socket it cannot bind,
+// it may decide the thing is stale, unlink it and bind its own. The session that
+// was there first keeps running with a socket nobody can reach any more, so
+// every X client started afterwards — Steam, Wine, anything on XWayland — gets
+// "unable to open a connection". Starting at 99, as xvfb-run does, keeps us out
+// of that neighbourhood entirely.
+const firstDisplay = 99
+
+// displaysToTry bounds the search, so a machine already crowded with virtual
+// displays fails with a clear message instead of scanning forever.
+const displaysToTry = 64
+
+// errDisplayTaken means the server we started gave up on the number, which
+// someone else claimed between our check and its bind. The next one is worth a
+// try.
+var errDisplayTaken = errors.New("display: number taken")
 
 // Mode selects where Chrome draws.
 type Mode string
@@ -51,6 +68,9 @@ type Display struct {
 	Name string
 
 	cmd *exec.Cmd
+	// exited closes once Xvfb has been reaped, so Close can wait for it
+	// without racing the goroutine that watches the process.
+	exited chan struct{}
 }
 
 // Ensure returns a display for Chrome to use.
@@ -72,64 +92,81 @@ func Ensure(ctx context.Context, width, height int, mode Mode) (*Display, error)
 			"to use the session already running, or -headless")
 	}
 
-	// -displayfd hands the choice of display number to Xvfb, which writes the
-	// one it took to the given descriptor. Picking a number ourselves means
-	// racing every other X server on the machine and tripping over the stale
-	// lock files a killed one leaves behind.
-	readEnd, writeEnd, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("display: pipe: %w", err)
-	}
-	defer readEnd.Close()
+	// The number is ours to pick, high enough to be out of reach of the session
+	// running on this machine. Letting Xvfb choose with -displayfd looks tidier
+	// and is not: its search starts at :0, right on top of the desktop.
+	for number := firstDisplay; number < firstDisplay+displaysToTry; number++ {
+		if displayInUse(number) {
+			continue
+		}
 
-	cmd := exec.CommandContext(ctx, xvfb,
-		"-displayfd", "3",
-		"-screen", "0", fmt.Sprintf("%dx%dx24", width, height),
-		"-nolisten", "tcp")
-	cmd.ExtraFiles = []*os.File{writeEnd}
+		cmd := exec.CommandContext(ctx, xvfb, fmt.Sprintf(":%d", number),
+			"-screen", "0", fmt.Sprintf("%dx%dx24", width, height),
+			"-nolisten", "tcp")
+		if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("display: start Xvfb: %w", err)
+		}
+		exited := make(chan struct{})
+		go func() {
+			_ = cmd.Wait()
+			close(exited)
+		}()
 
-	if err := cmd.Start(); err != nil {
-		writeEnd.Close()
-		return nil, fmt.Errorf("display: start Xvfb: %w", err)
-	}
-	// The child holds its own copy; ours has to go or the read never ends.
-	writeEnd.Close()
-
-	number, err := readDisplayNumber(readEnd)
-	if err != nil {
+		err := waitUntilAnswering(number, exited)
+		if err == nil {
+			return &Display{Name: fmt.Sprintf(":%d", number), cmd: cmd, exited: exited}, nil
+		}
 		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
+		<-exited
+		if errors.Is(err, errDisplayTaken) {
+			continue
+		}
 		return nil, err
 	}
 
-	return &Display{Name: ":" + number, cmd: cmd}, nil
+	return nil, fmt.Errorf("display: no display free between :%d and :%d",
+		firstDisplay, firstDisplay+displaysToTry-1)
 }
 
-// readDisplayNumber waits for Xvfb to announce the display it claimed.
-func readDisplayNumber(r *os.File) (string, error) {
-	type result struct {
-		line string
-		err  error
+// displayInUse reports whether a display number already belongs to someone —
+// either an X server holding its lock file, or a socket that still answers.
+func displayInUse(number int) bool {
+	if _, err := os.Stat(fmt.Sprintf("/tmp/.X%d-lock", number)); err == nil {
+		return true
 	}
-	done := make(chan result, 1)
+	return displayAnswers(number)
+}
 
-	go func() {
-		line, err := bufio.NewReader(r).ReadString('\n')
-		done <- result{strings.TrimSpace(line), err}
-	}()
+// displayAnswers reports whether a server is listening on the display's socket.
+// A socket file left behind by a dead server refuses the connection, so it
+// counts as free.
+func displayAnswers(number int) bool {
+	conn, err := net.DialTimeout("unix", fmt.Sprintf("/tmp/.X11-unix/X%d", number), 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
 
-	select {
-	case res := <-done:
-		if res.line == "" {
-			return "", fmt.Errorf("display: Xvfb reported no display number: %w", res.err)
+// waitUntilAnswering blocks until the server we just started takes connections.
+// A server that exits by itself lost the race for the number to someone who
+// bound it first, which is errDisplayTaken and worth retrying one number up.
+func waitUntilAnswering(number int, exited <-chan struct{}) error {
+	deadline := time.Now().Add(startupTimeout)
+	for {
+		if displayAnswers(number) {
+			return nil
 		}
-		if _, err := strconv.Atoi(res.line); err != nil {
-			return "", fmt.Errorf("display: Xvfb reported %q, which is not a display number", res.line)
+		select {
+		case <-exited:
+			return errDisplayTaken
+		default:
 		}
-		return res.line, nil
-
-	case <-time.After(startupTimeout):
-		return "", errors.New("display: Xvfb did not come up within " + startupTimeout.String())
+		if time.Now().After(deadline) {
+			return errors.New("display: Xvfb did not come up within " + startupTimeout.String())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -155,5 +192,5 @@ func (d *Display) Close() {
 		return
 	}
 	_ = d.cmd.Process.Kill()
-	_, _ = d.cmd.Process.Wait()
+	<-d.exited
 }
