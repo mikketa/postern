@@ -262,9 +262,11 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
     --models ~/.cache/postern-vision --hold <a panel series to test on>
 ```
 
-Fitted on 63 tiles from 7 grids and validated across independent series, so that no tile
+Fitted on 81 tiles from 9 grids and validated across independent series, so that no tile
 appeared in both: **5 ticks short and 1 in excess**, against roughly 4 in excess per grid
-for zero-shot CLIP. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
+for zero-shot CLIP. It is not calibrated, and more tiles is the only thing that fixes
+that — held out against two grids from a later run it had never seen, it missed nothing and
+ticked six squares in excess. It knows what a crossing looks like and not how sure to be. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
 installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
 
