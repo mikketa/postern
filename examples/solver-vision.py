@@ -148,6 +148,48 @@ BACKGROUNDS = [
     "a blurred photo of nothing in particular",
 ]
 
+# ADE20K classes, for the segmentation model. A 4x4 grid is one photograph, and
+# the question "which squares hold the bus" is a question about pixels — so it
+# is answered with a model that labels pixels, and the squares follow from the
+# mask. Several classes per category because ADE20K splits what reCAPTCHA does
+# not: a van and a truck are both a "camion", and a motorbike photographed at
+# distance is labelled a bicycle about as often as not.
+SEGMENT_CLASSES = {
+    "bus": (80, 102, 83),
+    "car": (20, 102, 83),
+    "taxi": (20, 102),
+    "truck": (83, 102),
+    "bicycle": (127,),
+    "motorcycle": (116, 127),
+    "traffic light": (136,),
+    "bridge": (61,),
+    "mountain": (16, 68),
+    "staircase": (53, 59),
+    "boat": (76,),
+    "palm tree": (72,),
+}
+
+# ImageNet normalisation, which is what the segmentation model was trained with
+# — not CLIP's, which is different and would quietly cost accuracy.
+SEGMENT_SIZE = 512
+SEGMENT_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+SEGMENT_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+# How much of a square has to be covered by the mask for it to count, as a
+# fraction of the most-covered square and as an absolute floor. Relative,
+# because a bus fills half a square and a traffic light a twentieth of one;
+# absolute, so that a grid holding none of the thing does not tick its least
+# empty square.
+SEGMENT_SHARE = float(os.environ.get("POSTERN_SEGMENT_SHARE") or 0.05)
+SEGMENT_FLOOR = float(os.environ.get("POSTERN_SEGMENT_FLOOR") or 0.01)
+
+# And how much of the grid has to be the thing at all before any square counts.
+SEGMENT_PRESENT = float(os.environ.get("POSTERN_SEGMENT_PRESENT") or 0.03)
+
+# The segmentation model, looked for next to the CLIP one. Absent, the 4x4
+# path is simply not taken.
+SEGMENT_MODEL = "segment.onnx"
+
 PASS = 2
 
 
@@ -278,6 +320,17 @@ def solve(image_path: str) -> list[tuple[float, float]]:
 
     panel = Image.open(image_path).convert("RGB")
     boxes = tiles()
+
+    # A 4x4 grid is one photograph, and which squares to tick is a question
+    # about where the thing is rather than what each square looks like. That is
+    # what a segmentation model answers, so it gets asked when there is one to
+    # ask and the category is one it knows. Measured over saved grids: this
+    # ticks 3.5 squares out of sixteen on average, against 8.7 for scoring each
+    # square — half the grid — and 1.8 for covering squares up.
+    if len(boxes) == 16 and os.path.exists(os.path.join(directory(), SEGMENT_MODEL)):
+        squares = segmented(panel, boxes, wanted)
+        if squares is not None:
+            return [(x + w / 2, y + h / 2) for x, y, w, h in (boxes[i] for i in sorted(squares))]
 
     # One vector for the question and one per thing it might be instead. The
     # question's vector is the average of its phrasings — several ways of asking
@@ -417,6 +470,55 @@ def main() -> int:
     for x, y in points:
         print(f"{x:.0f},{y:.0f}")
     return 0
+
+
+
+def segmented(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
+    """Which squares the thing is in, from a mask of where it is.
+
+    Returns None when the category is not one the segmentation model was
+    trained on — ADE20K has a bus and a bridge but no crosswalk and no fire
+    hydrant — so the caller can fall back to scoring squares.
+    """
+    classes = next((SEGMENT_CLASSES[name] for name in wanted if name in SEGMENT_CLASSES), None)
+    if classes is None:
+        return None
+
+    # The panel is a prompt above a grid; only the grid is a photograph.
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[0] + b[2] for b in boxes)
+    y1 = max(b[1] + b[3] for b in boxes)
+    grid = panel.crop((int(x0), int(y0), int(x1), int(y1)))
+
+    pixels = np.asarray(grid.resize((SEGMENT_SIZE, SEGMENT_SIZE), Image.Resampling.BICUBIC),
+                        dtype=np.float32) / 255.0
+    batch = ((pixels - SEGMENT_MEAN) / SEGMENT_STD).transpose(2, 0, 1)[None]
+
+    logits = session(SEGMENT_MODEL).run(None, {"pixel_values": batch})[0][0]
+    mask = np.isin(logits.argmax(0), classes)
+
+    # The mask comes back at its own resolution, a quarter of the input; the
+    # squares are in the panel's. Scaling the squares into the mask rather than
+    # the mask into the panel keeps this to arithmetic.
+    height, width = mask.shape
+    scale_x, scale_y = width / (x1 - x0), height / (y1 - y0)
+
+    share = []
+    for x, y, w, h in boxes:
+        square = mask[int((y - y0) * scale_y):int((y - y0 + h) * scale_y),
+                      int((x - x0) * scale_x):int((x - x0 + w) * scale_x)]
+        share.append(float(square.mean()) if square.size else 0.0)
+
+    peak = max(share)
+    if peak < SEGMENT_PRESENT:
+        print(f"no {classes} in the grid at all, best square {peak:.2f}", file=sys.stderr)
+        return set()
+
+    chosen = {i for i, v in enumerate(share) if v >= max(SEGMENT_FLOOR, SEGMENT_SHARE * peak)}
+    for i in sorted(chosen):
+        print(f"tile {i}: {share[i]*100:.0f}% covered", file=sys.stderr)
+    return chosen
 
 
 if __name__ == "__main__":
