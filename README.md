@@ -264,9 +264,12 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
 
 Fitted on 81 tiles from 9 grids and validated across independent series, so that no tile
 appeared in both: **5 ticks short and 1 in excess**, against roughly 4 in excess per grid
-for zero-shot CLIP. It is not calibrated, and more tiles is the only thing that fixes
-that — held out against two grids from a later run it had never seen, it missed nothing and
-ticked six squares in excess. It knows what a crossing looks like and not how sure to be. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
+for zero-shot CLIP. Each head also carries **the bar it should be read at**, found by
+fitting without one grid at a time and keeping whichever bar costs fewest mistakes — a
+number fixed in the solver cannot suit every head, and this one was wrong: held out against
+two grids from a later run it had never seen, the head missed nothing and ticked six
+squares in excess, which its own bar halved to three. More labelled grids is what moves it
+further. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
 installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
 

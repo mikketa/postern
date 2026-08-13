@@ -596,11 +596,18 @@ def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
                               [crop(panel, box, 0.0) for box in boxes])
         scores = 1.0 / (1.0 + np.exp(-(embeds @ weights + head["bias"])))
 
-        # Relative to the best tile as well as absolute. A grid holding none of
-        # the thing must tick nothing, so there is a floor; but how confident
-        # the head is varies with the photograph, so the bar for the rest of the
-        # grid is set by its own best tile.
-        bar = max(PROBE_FLOOR, PROBE_SHARE * float(scores.max()))
+        # A head that was calibrated says where to read it, and that is better
+        # than anything decided here: how sure a head is depends on what it was
+        # fitted on, so one number cannot serve them all. Measured on grids the
+        # head had never seen, its own bar halved the mistakes — six squares in
+        # excess became three.
+        #
+        # Without one, fall back to a floor and a share of the best tile: a grid
+        # holding none of the thing must tick nothing, and how confident the head
+        # is varies from photograph to photograph.
+        bar = head.get("bar")
+        if bar is None:
+            bar = max(PROBE_FLOOR, PROBE_SHARE * float(scores.max()))
         chosen = {i for i, score in enumerate(scores) if score >= bar}
         for index in sorted(chosen):
             print(f"tile {index}: {scores[index]:.2f} (head for {name}, bar {bar:.2f})",

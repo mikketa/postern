@@ -14,10 +14,12 @@ on one series of grids and tested on another so that no tile appeared in both:
 five ticks short and one in excess, against roughly four in excess per grid for
 zero-shot CLIP.
 
-It is not calibrated, and more tiles is the only thing that fixes that. Tested
-against two grids from a later run that it had never seen, the head fitted here
-missed nothing and ticked six squares in excess — it knows what a crossing looks
-like and not how sure to be about it. Every grid you label moves that.
+Each head also carries the bar it should be read at, found by fitting without
+one grid at a time and keeping whichever bar costs fewest mistakes. That matters
+more than it sounds: a bar fixed in the solver was measurably wrong for this
+head, which missed nothing and ticked six squares in excess on grids it had
+never seen. Its own bar halved that, to three. More labelled grids is what moves
+it further.
 
     # 1. save some grids. postern writes one per round with -save-panels.
     postern solve -kind recaptcha-v2 -url ... -sitekey ... \\
@@ -118,21 +120,59 @@ def fit(embeds, wanted):
     return weights, bias
 
 
-def score(weights, bias, embeds, wanted, source, share=0.70, floor=0.50):
+def score(weights, bias, embeds, wanted, source, bar=None, share=0.70, floor=0.50):
     """What the head gets right and wrong, grid by grid."""
     predicted = 1.0 / (1.0 + np.exp(-(embeds @ weights + bias)))
     missing = excess = 0
     for stem in sorted(set(source)):
         here = source == stem
         scores = predicted[here]
-        bar = max(floor, share * float(scores.max()))
-        picked = {i for i, v in enumerate(scores) if v >= bar}
+        cut = bar if bar is not None else max(floor, share * float(scores.max()))
+        picked = {i for i, v in enumerate(scores) if v >= cut}
         truth = {i for i, v in enumerate(wanted[here]) if v}
         missing += len(truth - picked)
         excess += len(picked - truth)
         mark = "exact" if picked == truth else f"picked {sorted(picked)} want {sorted(truth)}"
         print(f"  {stem}: {mark}")
     return missing, excess
+
+
+def calibrate(embeds, wanted, source):
+    """The bar this head should be read at, found by leaving one grid out.
+
+    How sure a head is depends on what it was fitted on, so a bar chosen once
+    and written into the solver is wrong for every head but the one it was
+    chosen for — and it was measurably wrong for this one, which missed nothing
+    and ticked six squares in excess on grids it had not seen.
+
+    So each head carries its own, picked the only honest way: fit without a
+    grid, score that grid, and keep whichever bar costs fewest mistakes across
+    all of them. A miss and a false tick are weighed the same because reCAPTCHA
+    weighs them the same — either one fails the grid.
+    """
+    grids = sorted(set(source))
+    if len(grids) < 3:
+        return None
+
+    predicted = np.zeros(len(wanted))
+    for grid in grids:
+        held = source == grid
+        weights, bias = fit(embeds[~held], wanted[~held])
+        predicted[held] = 1.0 / (1.0 + np.exp(-(embeds[held] @ weights + bias)))
+
+    best, cost = None, None
+    for bar in np.arange(0.30, 0.90, 0.01):
+        mistakes = 0
+        for grid in grids:
+            here = source == grid
+            picked = {i for i, v in enumerate(predicted[here]) if v >= bar}
+            truth = {i for i, v in enumerate(wanted[here]) if v}
+            mistakes += len(truth - picked) + len(picked - truth)
+        if cost is None or mistakes < cost:
+            best, cost = float(bar), mistakes
+
+    print(f"bar {best:.2f}, costing {cost} mistakes over {len(grids)} grids left out one at a time")
+    return best
 
 
 def main():
@@ -161,14 +201,16 @@ def main():
     embeds, wanted, source = read(args.panels, training, vision)
     print(f"fitting on {int(wanted.sum())} tiles that hold it, {len(wanted)} in all")
     weights, bias = fit(embeds, wanted)
+    bar = calibrate(embeds, wanted, source)
 
     if held:
         print("held out:")
-        missing, excess = score(weights, bias, *read(args.panels, held, vision))
+        missing, excess = score(weights, bias, *read(args.panels, held, vision),
+                                bar=bar)
         print(f"held out: -{missing} +{excess}")
     else:
         print("on its own training tiles, which is not a measurement:")
-        score(weights, bias, embeds, wanted, source)
+        score(weights, bias, embeds, wanted, source, bar=bar)
         print("nothing was held out — pass --hold to find out whether it generalises")
 
     out = os.path.join(args.models, f"probe-{args.category.replace(' ', '-')}.json")
@@ -178,6 +220,7 @@ def main():
             "model": args.model,
             "bias": float(bias),
             "weights": [round(float(v), 6) for v in weights],
+            "bar": round(bar, 2) if bar is not None else None,
             "tiles": int(len(wanted)),
             "positive": int(wanted.sum()),
         }, handle)
