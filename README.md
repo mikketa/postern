@@ -276,6 +276,21 @@ answered and simply was not — and all of them are worth knowing about if you a
 something similar. Each was found by measuring rather than reasoning, and every one of
 them was, at the time, comfortably blamed on the vision model.
 
+*The panel stops appearing halfway, and stays there.* reCAPTCHA fades its panel in over the
+page. Under a virtual display nothing composites a frame while the page sits idle, so the
+fade freezes wherever it was when the last frame went out — and the screenshot catches a
+grid at partial opacity with the form behind it showing through. Nothing in the document
+says so: the pictures are loaded, the tiles are listed, the geometry is exact. Measured on
+the demo page, the opening grid of every run came back like that, and a second screenshot
+was never answered at all, because there was no new frame to answer with.
+
+What fixes it is a change to the layout. Moving the pointer does not (no cursor is
+composited), nor does scrolling a pixel, asking for a screencast, or overriding the page's
+backdrop colour — all four were tried and measured. A view one pixel taller and back does,
+and the panel is measured again afterwards because it does not always come back exactly
+where it was. Ten grids out of ten came back clean after that, against one in six unusable
+before.
+
 *The verify button is often not where the browser says it is.* reCAPTCHA lays its panel
 out taller than the space it gives it, and the buttons end up below a container that clips
 them: `getBoundingClientRect` returns a perfectly plausible rectangle, nothing is painted

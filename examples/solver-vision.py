@@ -231,7 +231,7 @@ DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.15)
 # The weights only mean anything against the encoder they were fitted on, so
 # each file names its model and is ignored under any other.
 PROBE_SHARE = float(os.environ.get("POSTERN_PROBE_SHARE") or 0.70)
-PROBE_FLOOR = float(os.environ.get("POSTERN_PROBE_FLOOR") or 0.30)
+PROBE_FLOOR = float(os.environ.get("POSTERN_PROBE_FLOOR") or 0.50)
 
 # ADE20K classes, for the segmentation model. A 4x4 grid is one photograph, and
 # the question "which squares hold the bus" is a question about pixels — so it
