@@ -47,18 +47,7 @@ Success here is mostly not about the solver.
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
 other lever for reCAPTCHA v2 is **reputation** — a profile with history behind it, and an
-IP that is not a datacenter — which is not something a solver can manufacture. What it can
-do is go out from somewhere else, which is what `-proxy` is for, credentials included:
-
-```sh
-postern solve -proxy http://user:pass@host:port ...
-```
-
-Chrome cannot be given a proxy password on the command line — it drops it, gets `407` back
-and raises a sign-in dialog nobody is there to answer, which surfaces as
-`ERR_INVALID_AUTH_CREDENTIALS` and nothing else. Postern strips the credentials off the
-flag, which also keeps them out of a world-readable `/proc`, and answers the challenge over
-CDP instead.
+IP that is not a datacenter — which is not something a solver can manufacture.
 
 How much it dominates is visible in the runs. Counting the rounds each one took — a round
 being one grid read, answered and submitted, six of which is one full pass of the solve
@@ -84,6 +73,20 @@ other. An interleaved A/B was started and abandoned — by then both arms were b
 at three rounds, which measures the address rather than either solver. The per-solver
 comparisons that this file does make are the offline ones, on saved grids whose answers
 were checked by eye.
+
+What a solver *can* do about an address is leave from another one, which is what `-proxy`
+is for, password included:
+
+```sh
+postern solve -proxy http://user:pass@host:port ...
+```
+
+Chrome cannot be given a proxy password on the command line — it drops it, gets `407` back
+and raises a sign-in dialog nobody is there to answer, which surfaces as
+`ERR_INVALID_AUTH_CREDENTIALS` and nothing else. Postern strips the credentials off the
+flag, which also keeps them out of a world-readable `/proc`, and signs in over CDP instead.
+This is plumbing, not a result: it is measured against a proxy that demands a password,
+not against a claim about what any particular exit address is worth to Google.
 
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
