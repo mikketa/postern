@@ -26,14 +26,22 @@ import (
 type timings struct {
 	spent map[string]time.Duration
 	calls map[string]int
-	begun time.Time
+	// inner holds measurements taken *inside* a tracked phase — the mouse
+	// travel within a repaint, one turn of a polling loop. They are kept apart
+	// because adding them to the phases they sit in would count the same
+	// milliseconds twice and take the shares past a hundred.
+	inner  map[string]time.Duration
+	within map[string]int
+	begun  time.Time
 }
 
 func newTimings() *timings {
 	return &timings{
-		spent: map[string]time.Duration{},
-		calls: map[string]int{},
-		begun: time.Now(),
+		spent:  map[string]time.Duration{},
+		calls:  map[string]int{},
+		inner:  map[string]time.Duration{},
+		within: map[string]int{},
+		begun:  time.Now(),
 	}
 }
 
@@ -47,6 +55,20 @@ func (t *timings) track(phase string) func() {
 	return func() {
 		t.spent[phase] += time.Since(started)
 		t.calls[phase]++
+	}
+}
+
+// detail is track for something that happens inside a phase. Its call count is
+// often the answer on its own: a polling loop that always turns the maximum
+// number of times is a fixed cost pretending to be a wait.
+func (t *timings) detail(phase string) func() {
+	if t == nil {
+		return func() {}
+	}
+	started := time.Now()
+	return func() {
+		t.inner[phase] += time.Since(started)
+		t.within[phase]++
 	}
 }
 
@@ -92,5 +114,21 @@ func (t *timings) report(log *slog.Logger, rounds int) {
 	if rest := total - tracked; rest > 0 {
 		log.Info("time", "phase", "unattributed", "took", rest.Round(time.Millisecond),
 			"share", share(rest))
+	}
+
+	within := make([]string, 0, len(t.inner))
+	for phase := range t.inner {
+		within = append(within, phase)
+	}
+	sort.Slice(within, func(i, j int) bool {
+		return t.inner[within[i]] > t.inner[within[j]]
+	})
+	for _, phase := range within {
+		spent := t.inner[phase]
+		log.Info("time", "within", phase,
+			"took", spent.Round(time.Millisecond),
+			"share", share(spent),
+			"times", t.within[phase],
+			"each", (spent / time.Duration(max(t.within[phase], 1))).Round(time.Millisecond))
 	}
 }

@@ -218,7 +218,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 	// that keeps handing back the same grid is not going to be talked round,
 	// and every attempt costs a round trip to the solver.
 	fresh := func(before []string) error {
-		changed, err := reload(ctx, frame, before)
+		changed, err := reload(ctx, frame, before, times)
 		if err != nil {
 			return err
 		}
@@ -352,7 +352,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		// wrong one — so go round again and look at what replaced them.
 		if clicked > 0 {
 			stop := times.track("waiting for replacements")
-			replaced, err := await(ctx, frame, before, replaceAttempts)
+			replaced, err := await(ctx, frame, before, replaceAttempts, times)
 			stop()
 			if err != nil {
 				return rounds, err
@@ -364,14 +364,14 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 
 		// Nothing left to click: submit, and wait to be told.
 		stop = times.track("submitting")
-		err = Verify(ctx, frame, log)
+		err = verify(ctx, frame, times, log)
 		stop()
 		if err != nil {
 			return rounds, err
 		}
 
 		stop = times.track("waiting for the verdict")
-		_, err = await(ctx, frame, before, verdictAttempts)
+		_, err = await(ctx, frame, before, verdictAttempts, times)
 		stop()
 		if err != nil {
 			return rounds, err
@@ -435,7 +435,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	// means changing the layout and the panel does not always come back exactly
 	// where it was.
 	stop := times.track("waking the page")
-	err := stir(ctx, frame)
+	err := stir(ctx, frame, times)
 	stop()
 	if err != nil {
 		return nil, err
@@ -460,7 +460,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		// And again before looking again, or the page will sit exactly as it is
 		// and the second photograph will never be answered.
 		stop := times.track("waking the page")
-		err := stir(ctx, frame)
+		err := stir(ctx, frame, times)
 		if err == nil {
 			err = input.Pause(ctx, loadWaitMin, loadWaitMax)
 		}
@@ -558,7 +558,7 @@ func keep(dir string, shot []byte, view View) error {
 // decided to keep this grid is a loop with no exit: measured at seventeen
 // identical rounds — the same picture, the same score to two decimal places —
 // burning a two-minute budget that had nowhere to go.
-func reload(ctx context.Context, frame *Frame, before []string) (bool, error) {
+func reload(ctx context.Context, frame *Frame, before []string, times *timings) (bool, error) {
 	if frame.View.Reload == nil {
 		return false, fmt.Errorf("challenge: solver passed on %q and the panel offers no other",
 			frame.View.Prompt)
@@ -571,7 +571,7 @@ func reload(ctx context.Context, frame *Frame, before []string) (bool, error) {
 
 	// Wait for a genuinely different grid rather than photographing the old one
 	// again, which would pass right back to the solver and stall the round.
-	return await(ctx, frame, before, replaceAttempts)
+	return await(ctx, frame, before, replaceAttempts, times)
 }
 
 // await waits for the panel to become something other than what it was: a
@@ -579,9 +579,12 @@ func reload(ctx context.Context, frame *Frame, before []string) (bool, error) {
 // budget rather than stopping at the first quiet moment: reCAPTCHA takes a
 // beat to decide, and a grid read too early looks exactly like a grid that is
 // never going to change.
-func await(ctx context.Context, frame *Frame, before []string, tries int) (bool, error) {
+func await(ctx context.Context, frame *Frame, before []string, tries int, times *timings) (bool, error) {
 	for range tries {
-		if err := input.Pause(ctx, int(replaceWait.Milliseconds()), int(replaceWait.Milliseconds())); err != nil {
+		stop := times.detail("one look at the panel")
+		err := input.Pause(ctx, int(replaceWait.Milliseconds()), int(replaceWait.Milliseconds()))
+		stop()
+		if err != nil {
 			return false, err
 		}
 		if err := frame.Reread(ctx); err != nil {
@@ -627,6 +630,12 @@ const verifySelector = "#recaptcha-verify-button"
 // behind. Widening the frame does not help — the clipping is inside the
 // document — but a focused button still answers Enter.
 func Verify(ctx context.Context, frame *Frame, log *slog.Logger) error {
+	return verify(ctx, frame, nil, log)
+}
+
+// verify is Verify with somewhere to record what the waiting cost. The exported
+// one is what the solver package tests against, and it has no clock to hand.
+func verify(ctx context.Context, frame *Frame, times *timings, log *slog.Logger) error {
 	if err := input.Pause(ctx, beforeVerifyMin, beforeVerifyMax); err != nil {
 		return err
 	}
@@ -662,7 +671,7 @@ func Verify(ctx context.Context, frame *Frame, log *slog.Logger) error {
 		// pointer arrives — the panel relabels and relays itself mid-round, and
 		// a click into that gap is swallowed silently. If nothing moved, fall
 		// through to the keyboard rather than leaving the answer unsubmitted.
-		taken, err := await(ctx, frame, before, pointerAttempts)
+		taken, err := await(ctx, frame, before, pointerAttempts, times)
 		if err != nil || taken || !frame.Open() {
 			return err
 		}
@@ -739,14 +748,17 @@ func click(ctx context.Context, frame *Frame, x, y float64) error {
 // first grid of every run came back washed out, mixed with the page behind it,
 // while every later grid — after the pointer had moved to click something — was
 // clean. Moving the pointer is what a person does before choosing anyway.
-func stir(ctx context.Context, frame *Frame) error {
+func stir(ctx context.Context, frame *Frame, times *timings) error {
 	fromX, fromY := frame.Point(frame.View.Width+70, frame.View.Height+50)
 	toX, toY := frame.Point(frame.View.Width/2, frame.View.Height/2)
 
-	if err := chromedp.Run(ctx, input.Move(
+	stop := times.detail("moving the pointer")
+	err := chromedp.Run(ctx, input.Move(
 		input.Point{X: fromX, Y: fromY},
 		input.Point{X: toX, Y: toY},
-	)); err != nil {
+	))
+	stop()
+	if err != nil {
 		return err
 	}
 
@@ -767,10 +779,13 @@ func stir(ctx context.Context, frame *Frame) error {
 		return err
 	}
 
-	if err := chromedp.Run(ctx,
+	stop = times.detail("resizing to force a paint")
+	err = chromedp.Run(ctx,
 		emulation.SetDeviceMetricsOverride(size.W, size.H+1, 1, false),
 		emulation.ClearDeviceMetricsOverride(),
-	); err != nil {
+	)
+	stop()
+	if err != nil {
 		return err
 	}
 
