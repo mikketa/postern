@@ -198,8 +198,37 @@ reads:
 | A bus, on the tile holding it | 0.54 | **0.94** |
 
 A sharper model is also more confident about everything, so the threshold does not carry
-over — set `POSTERN_CLIP_CONFIDENCE` when you change models. What does not change is
-postern: the grid is still read, clicked and submitted the same way.
+over — `install-clip.sh` sets it per model, and `POSTERN_CLIP_CONFIDENCE` overrides it.
+What does not change is postern: the grid is still read, clicked and submitted the same
+way.
+
+**The two layouts are different questions.** A 3x3 grid is nine separate photographs, and
+each can be asked "is there a bus in this one" on its own. A 4x4 is *one* photograph cut
+up, where a quarter of a bus fills four squares and none of them is a picture of a bus.
+Scoring those squares one at a time gets the middle of the object and misses its edges;
+scoring each with a margin of its neighbours picks up the empty tarmac beside it. Both are
+wrong in the way that matters — ticks missing, ticks in excess, grid refused either way.
+
+So on a 4x4 the squares are found by **taking them away**: grey one out, score the whole
+picture again, and the drop is how much of the answer was in there. Greedily, one at a
+time, because a picture with two bicycles does not stop being one when you cover the first
+— that second bicycle's own square dropped the score by 0.01, and by 0.39 once the first
+was covered for good. The loop stops when what is left no longer looks like the thing,
+rather than when the drops get small: on a crowded grid the first drop is the smallest one
+there is.
+
+Measured over 49 tiles of saved grids, with the answers checked by eye:
+
+| | Scoring each square | Covering squares up |
+| --- | --- | --- |
+| Ticks missing | 1 | 1 |
+| Ticks in excess | 5 | **1** |
+| Bicycle and motorcycle grids | wrong both ways | **exactly right** |
+
+This needs a model that can tell: on ViT-B/32, covering a square barely moves a score it
+was never sure of, and the pass finds almost nothing. That is why `install-clip.sh`
+defaults to patch16, and why patch32 falls back to the per-square scoring
+(`POSTERN_CLIP_LAYOUT=tiles` forces it).
 
 Things that were tried and did not work, so you can skip them: **median-filtering the
 noise out** before scoring lifts the best score on a bad grid from 0.20 to 0.25 and costs
