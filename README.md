@@ -28,7 +28,7 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, dummy interactive key, after the widget moved | token, 3.9s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-clip.py` |
+| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-vision.py` |
 | Same, with `solver-yolos.py` | 2/5, measured in the following hour |
 | Same, after ~25 solves from one address | **0/5** — see reputation, below |
 
@@ -167,7 +167,7 @@ Three examples ship with it:
 | --- | --- |
 | `examples/solver-template.py` | the twenty lines, to build your own on |
 | `examples/solver-yolos.py` | YOLOS-tiny, a detector: knows the eighty things COCO has words for, passes on the rest |
-| `examples/solver-clip.py` | CLIP, zero-shot: the category comes from the prompt at runtime, so there is no list to fall off |
+| `examples/solver-vision.py` | CLIP for a 3x3 grid, segmentation for a 4x4: the category comes from the prompt at runtime, so there is no list to fall off |
 
 The difference matters more than model size. A detector answers "is there a bus here"
 because a bus was in its training labels; ask it about a crosswalk, a staircase, a chimney
@@ -176,10 +176,10 @@ CLIP scores a picture against a sentence, and postern already read the sentence 
 challenge document, so the category is whatever was asked for this round.
 
 ```sh
-examples/install-clip.sh ~/.cache/postern-clip     # venv, models, wrapper
+examples/install-vision.sh ~/.cache/postern-vision   # venv, models, wrapper
 
 postern solve -kind recaptcha-v2 -url ... -sitekey ... \
-    -image-solver ~/.cache/postern-clip/solve
+    -image-solver ~/.cache/postern-vision/solve
 ```
 
 That script exists because "supply your own vision model" should be a line to copy, not an
@@ -198,44 +198,39 @@ reads:
 | A bus, on the tile holding it | 0.54 | **0.94** |
 
 A sharper model is also more confident about everything, so the threshold does not carry
-over — `install-clip.sh` sets it per model, and `POSTERN_CLIP_CONFIDENCE` overrides it.
+over — `install-vision.sh` sets it per model, and `POSTERN_CLIP_CONFIDENCE` overrides it.
 What does not change is postern: the grid is still read, clicked and submitted the same
 way.
 
 **The two layouts are different questions.** A 3x3 grid is nine separate photographs, and
 each can be asked "is there a bus in this one" on its own. A 4x4 is *one* photograph cut
 up, where a quarter of a bus fills four squares and none of them is a picture of a bus.
-Scoring those squares one at a time gets the middle of the object and misses its edges;
-scoring each with a margin of its neighbours picks up the empty tarmac beside it. Both are
+Asking each square what it is gets the middle of the object and misses its edges; asking
+each square plus a margin of its neighbours picks up the empty tarmac beside it. Both are
 wrong in the way that matters — ticks missing, ticks in excess, grid refused either way.
 
-So on a 4x4 the squares are found by **taking them away**: grey one out, score the whole
-picture again, and the drop is how much of the answer was in there. Greedily, one at a
-time, because a picture with two bicycles does not stop being one when you cover the first
-— that second bicycle's own square dropped the score by 0.01, and by 0.39 once the first
-was covered for good. The loop stops when what is left no longer looks like the thing,
-rather than when the drops get small: on a crowded grid the first drop is the smallest one
-there is.
+Which squares hold the bus is a question about *pixels*, so it is answered by a model that
+labels pixels. SegFormer on ADE20K segments the grid, and the squares follow from the mask.
+Measured over the saved 4x4 grids with blank captures excluded, squares ticked out of
+sixteen:
 
-Measured over 49 tiles of saved grids, with the answers checked by eye:
-
-| | Scoring each square | Covering squares up |
+| Method | Squares ticked (want 3-6) | On grids checked by eye |
 | --- | --- | --- |
-| Ticks missing | 1 | 1 |
-| Ticks in excess | 5 | **1** |
-| Bicycle and motorcycle grids | wrong both ways | **exactly right** |
+| Scoring each square | 8.7 — more than half the grid | 1 missing, 5 in excess |
+| Covering squares up, greedily | 1.8 | — |
+| **Segmentation** | **3.5** | **1 missing, 1 in excess** |
 
-This needs a model that can tell: on ViT-B/32, covering a square barely moves a score it
-was never sure of, and the pass finds almost nothing. That is why `install-clip.sh`
-defaults to patch16, and why patch32 falls back to the per-square scoring
-(`POSTERN_CLIP_LAYOUT=tiles` forces it).
+The bicycle and motorcycle grids come out exactly right. Covering squares up — grey a
+square out, score the picture again, and the drop is how much of the answer was in there —
+is a good idea that measures badly: it can only find a square whose covering changes what
+the picture is *of*, and half a bus does not, so it stops early and ticks 1.8 squares.
+`POSTERN_CLIP_LAYOUT=occlusion` still selects it.
 
-Things that were tried and did not work, so you can skip them: **median-filtering the
-noise out** before scoring lifts the best score on a bad grid from 0.20 to 0.25 and costs
-more than it gains — across the saved panels it took grids with something to click from 33
-down to 30, because it removes as much signal as noise. And **swapping the negatives** —
-suspecting "a photo of an empty road" of absorbing a grid of parked cars — moves the same
-number from 0.20 to 0.25. Neither is the problem. The model is.
+The segmentation model is optional. Without `segment.onnx` beside the CLIP files the 4x4
+path is not taken, and categories ADE20K does not have — crosswalk, fire hydrant, parking
+meter — fall back to scoring squares, since a mask of nothing is not an answer. B0 is
+what `install-vision.sh` fetches, at 15MB; B4 is better (one tick in excess against five)
+but ships as PyTorch weights, and the conversion is written out in that script.
 
 **What was hard about this.** Most of these failures were silent — the challenge looked
 answered and simply was not — and all of them are worth knowing about if you are building
