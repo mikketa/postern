@@ -302,7 +302,15 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     # picture of a bus — asking each square on its own gets you the middle of
     # the object and misses its edges, and asking each square plus a margin of
     # its neighbours gets you the empty tarmac beside it too.
-    cut_up = len(boxes) == 16 and os.environ.get("POSTERN_CLIP_LAYOUT") != "tiles"
+    # Covering squares up is the better idea and the worse solver, for now: over
+    # eighteen saved 4x4 grids it ticks 1.3 squares on average where those grids
+    # want three to six, and eight of them come back empty. It is right when it
+    # answers — one tick in excess over the grids checked by eye — but it stops
+    # too early far too often, because it can only find a square whose covering
+    # changes what the picture is *of*, and half a bus does not. Scoring each
+    # square is cruder and ticks too much, but it ticks. Until that is fixed,
+    # POSTERN_CLIP_LAYOUT=occlusion opts in.
+    cut_up = len(boxes) == 16 and os.environ.get("POSTERN_CLIP_LAYOUT") == "occlusion"
     chosen = occluded(panel, boxes, probability) if cut_up else scored(panel, boxes, probability)
 
     hits = []

@@ -28,7 +28,7 @@ SCRIPT=$(cd "$(dirname "$0")" && pwd)/solver-clip.py
 # Both calibrated over saved grids with the answers checked by eye. LAYOUT
 # forces the one-square-at-a-time path on the model that needs it.
 case $MODEL in
-patch16) CONFIDENCE=0.55; LAYOUT=occlusion ;;
+patch16) CONFIDENCE=0.55; LAYOUT=tiles ;;
 patch32) CONFIDENCE=0.34; LAYOUT=tiles ;;
 *) echo "unknown model $MODEL, want patch16 or patch32" >&2; exit 1 ;;
 esac
