@@ -18,8 +18,8 @@ Each head also carries the bar it should be read at, found by fitting without
 one grid at a time and keeping whichever bar costs fewest mistakes. That matters
 more than it sounds: a bar fixed in the solver was measurably wrong for this
 head, which missed nothing and ticked six squares in excess on grids it had
-never seen. Its own bar halved that, to three. More labelled grids is what moves
-it further.
+never seen. Its own bar halved that, to three, and dropping the tiles reCAPTCHA
+had already served took it to one over a whole six-round challenge.
 
     # 1. save some grids. postern writes one per round with -save-panels.
     postern solve -kind recaptcha-v2 -url ... -sitekey ... \\
@@ -42,9 +42,13 @@ Two things matter more than the amount of data:
 
   * Label what the grid actually shows, not what you think it wants. A tile
     with a crossing in the far corner is a tile with a crossing.
-  * Keep reloads of the same grid together. reCAPTCHA serves the same tiles
-    again after a reload, and a head validated on its own training tiles looks
-    much better than it is. --hold takes a series out for testing.
+  * Label every round of a challenge, reloads included. A round only replaces
+    the squares you ticked, so a six-round challenge is six copies of the same
+    negatives around one or two new pictures; both the fitting and the bar are
+    thrown off by the repeats, and a round scored against the round before it
+    is scored on tiles it was fitted on. This throws the repeats away for you,
+    across --hold as well, so labelling them costs nothing and the few new
+    pictures are kept.
 
 The head lands next to the models as probe-<category>.json and is picked up
 automatically. It is tied to the encoder it was fitted on: a head fitted on
@@ -52,6 +56,7 @@ patch16 is ignored under patch32, which is why the file names its model.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -85,9 +90,21 @@ def encode(vision, images):
     return embeds / np.linalg.norm(embeds, axis=-1, keepdims=True)
 
 
-def read(panels, labels, vision, augment=True):
-    """Every labelled tile, as an embedding and a yes or no."""
+def read(panels, labels, vision, augment=True, seen=None):
+    """Every labelled tile, as an embedding and a yes or no.
+
+    Tiles already in `seen` are skipped, and the ones kept are added to it, so
+    the same picture is never read twice. reCAPTCHA replaces only the squares
+    you tick and serves the rest again, so six rounds of one challenge are six
+    copies of the same six negatives and one or two new pictures. Learning
+    those six times does not learn them better, it just buries the positives;
+    and a round scored against the round before it is scored on tiles it was
+    fitted on. Passing the same set through training and then through the
+    held-out grids removes both at once.
+    """
     embeds, wanted, source = [], [], []
+    if seen is None:
+        seen = set()
     for stem, tiles in labels.items():
         shot = os.path.join(panels, stem + ".png")
         meta_path = os.path.join(panels, stem + ".json")
@@ -100,7 +117,17 @@ def read(panels, labels, vision, augment=True):
         boxes = [tuple(int(v) for v in part.split(",")) for part in meta["tiles"].split(";")]
 
         panel = Image.open(shot).convert("RGB")
-        crops = [panel.crop((x, y, x + w, y + h)) for x, y, w, h in boxes]
+        crops, marks = [], []
+        for i, (x, y, w, h) in enumerate(boxes):
+            crop = panel.crop((x, y, x + w, y + h))
+            fingerprint = hashlib.sha1(crop.tobytes()).hexdigest()
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            crops.append(crop)
+            marks.append(1.0 if i in tiles else 0.0)
+        if not crops:
+            continue
 
         # Each tile twice, the second one mirrored. A crossing seen in a mirror
         # is still a crossing, so the label carries over for free and the head
@@ -116,8 +143,8 @@ def read(panels, labels, vision, augment=True):
             versions.append([c.transpose(Image.FLIP_LEFT_RIGHT) for c in crops])
         for images in versions:
             embeds.append(encode(vision, images))
-            wanted += [1.0 if i in tiles else 0.0 for i in range(len(boxes))]
-            source += [stem] * len(boxes)
+            wanted += marks
+            source += [stem] * len(marks)
 
     if not embeds:
         raise SystemExit("nothing to train on")
@@ -147,6 +174,8 @@ def score(weights, bias, embeds, wanted, source, bar=None, share=0.70, floor=0.5
         truth = {i for i, v in enumerate(wanted[here]) if v}
         missing += len(truth - picked)
         excess += len(picked - truth)
+        # Positions among the tiles kept for this grid, not square numbers:
+        # anything served twice was dropped before it got here.
         mark = "exact" if picked == truth else f"picked {sorted(picked)} want {sorted(truth)}"
         print(f"  {stem}: {mark}")
     return missing, excess
@@ -213,7 +242,8 @@ def main():
     held = {k: v for k, v in labels.items() if k in set(args.hold)}
     training = {k: v for k, v in labels.items() if k not in held}
 
-    embeds, wanted, source = read(args.panels, training, vision)
+    seen = set()
+    embeds, wanted, source = read(args.panels, training, vision, seen=seen)
     print(f"fitting on {int(wanted.sum())} tiles that hold it, {len(wanted)} in all")
     weights, bias = fit(embeds, wanted)
     bar = calibrate(embeds, wanted, source)
@@ -222,7 +252,10 @@ def main():
         print("held out:")
         # Not augmented: a mirrored copy is for learning from, not for being
         # marked on. Counting it would report every mistake twice.
-        missing, excess = score(weights, bias, *read(args.panels, held, vision, augment=False),
+        # `seen` carries over from training, so a square the head has already
+        # been fitted on cannot be marked as if it were new.
+        missing, excess = score(weights, bias,
+                                *read(args.panels, held, vision, augment=False, seen=seen),
                                 bar=bar)
         print(f"held out: -{missing} +{excess}")
     else:
