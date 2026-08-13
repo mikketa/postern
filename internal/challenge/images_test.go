@@ -295,6 +295,85 @@ func TestBlankSpotsAnUnpaintedGrid(t *testing.T) {
 	}
 }
 
+// TestSettledSpotsAGridStillFadingIn covers the half-painted case, which is
+// the dangerous one: the pictures are there, so nothing about the photograph
+// says it was taken too early, and the answers come back wrong.
+func TestSettledSpotsAGridStillFadingIn(t *testing.T) {
+	tiles := []Box{
+		{X: 0, Y: 0, W: 60, H: 60}, {X: 60, Y: 0, W: 60, H: 60},
+		{X: 0, Y: 60, W: 60, H: 60}, {X: 60, Y: 60, W: 60, H: 60},
+	}
+
+	// The same photographs, one at half opacity over white and one finished.
+	fading := image.NewRGBA(image.Rect(0, 0, 120, 120))
+	noise(fading)
+	washOut(fading)
+
+	finished := image.NewRGBA(image.Rect(0, 0, 120, 120))
+	noise(finished)
+
+	// And the same picture again, with a cursor's worth of pixels moved.
+	nudged := image.NewRGBA(image.Rect(0, 0, 120, 120))
+	noise(nudged)
+	fill(nudged, 20, 20, 32, 32, 0, 0, 0)
+
+	cases := []struct {
+		name          string
+		before, after *image.RGBA
+		want          bool
+	}{
+		{"a grid that has finished arriving", finished, finished, true},
+		{"a grid still fading in", fading, finished, false},
+		{"the same grid with the cursor over it", finished, nudged, true},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := settled(encode(t, c.before), encode(t, c.after), tiles); got != c.want {
+				t.Errorf("settled = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// Nothing to compare is not evidence that anything has settled.
+	if settled(nil, encode(t, finished), tiles) {
+		t.Error("a missing photograph was called settled")
+	}
+	if settled(encode(t, finished), encode(t, finished), nil) {
+		t.Error("a panel with no tiles was called settled")
+	}
+	if settled([]byte("not a png"), encode(t, finished), tiles) {
+		t.Error("an unreadable screenshot was called settled")
+	}
+}
+
+func encode(t *testing.T, img *image.RGBA) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// washOut is a picture halfway through reCAPTCHA's fade: still recognisable,
+// still wrong to answer.
+func washOut(img *image.RGBA) {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := img.RGBAAt(x, y)
+			img.SetRGBA(x, y, color.RGBA{
+				R: uint8((int(c.R) + 255) / 2),
+				G: uint8((int(c.G) + 255) / 2),
+				B: uint8((int(c.B) + 255) / 2),
+				A: 255,
+			})
+		}
+	}
+}
+
 func fill(img *image.RGBA, x0, y0, x1, y1 int, r, g, b uint8) {
 	for y := y0; y < y1; y++ {
 		for x := x0; x < x1; x++ {

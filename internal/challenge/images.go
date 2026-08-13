@@ -47,6 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"log/slog"
 	"os"
@@ -136,9 +137,9 @@ const (
 	// solverErrLines is how much of a failing solver's output to quote back.
 	solverErrLines = 3
 
-	// blankAttempts is how many times to wait and photograph the grid again
-	// when what came back has nothing in it.
-	blankAttempts = 6
+	// paintAttempts is how many times to wait and photograph the grid again
+	// while it is still being painted.
+	paintAttempts = 6
 
 	// blankTilesPercent is how much of the grid has to be one flat colour for
 	// the whole thing to count as unpainted. Not all of it: a real grid can
@@ -150,6 +151,12 @@ const (
 	// flat, out of 65535, and blankStride how many pixels apart to sample.
 	blankRange  = 900
 	blankStride = 4
+
+	// settleRange is how far two photographs of the same grid may differ, on
+	// average and out of 65535, and still count as the same picture. Generous
+	// enough to ignore a repainted cursor or a hairline of antialiasing, and far
+	// below what a fade moves.
+	settleRange = 600
 )
 
 // errPass is that refusal, travelling back up to the round loop.
@@ -363,13 +370,20 @@ func ready(ctx context.Context, frame *Frame) error {
 // an image that has been painted. Measured over 88 captured panels: fourteen of
 // them, one in six, were entirely flat squares. The solver did what anyone
 // would do with a blank grid and found nothing in it, and the round was spent.
+//
+// Blank is only the beginning of the fade, though, and the middle of it is
+// worse: the pictures are there, washed out and mixed with the page behind
+// them, so the grid looks answerable and the answers are wrong. No single
+// photograph shows that it was taken mid-fade. Two do — a fading grid changes
+// between them and a finished one does not — so this takes photographs until
+// two in a row agree.
 func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, error) {
 	shot, err := capture(ctx, frame)
 	if err != nil {
 		return nil, err
 	}
 
-	for attempt := 1; blank(shot, frame.View.Tiles) && attempt <= blankAttempts; attempt++ {
+	for range paintAttempts {
 		if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
 			return nil, err
 		}
@@ -379,8 +393,15 @@ func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, erro
 		if !frame.Open() {
 			return nil, nil
 		}
-		if shot, err = capture(ctx, frame); err != nil {
+
+		again, err := capture(ctx, frame)
+		if err != nil {
 			return nil, err
+		}
+		steady := settled(shot, again, frame.View.Tiles)
+		shot = again
+		if steady && !blank(shot, frame.View.Tiles) {
+			break
 		}
 	}
 
@@ -751,6 +772,59 @@ func blank(shot []byte, tiles []Box) bool {
 		}
 	}
 	return flat*100 >= len(tiles)*blankTilesPercent
+}
+
+// settled reports that two photographs of the grid, taken moments apart, show
+// the same picture — which is how a finished grid is told from one still
+// fading in.
+//
+// Averaged rather than thresholded per pixel: a fade moves every pixel of every
+// tile a little, which averages high, while a redrawn cursor moves a handful of
+// pixels a lot, which does not.
+func settled(before, after []byte, tiles []Box) bool {
+	if len(tiles) == 0 || len(before) == 0 {
+		return false
+	}
+
+	first, err := png.Decode(bytes.NewReader(before))
+	if err != nil {
+		return false
+	}
+	second, err := png.Decode(bytes.NewReader(after))
+	if err != nil {
+		return false
+	}
+	if !first.Bounds().Eq(second.Bounds()) {
+		return false
+	}
+
+	var total, samples uint64
+	for _, tile := range tiles {
+		bounds := first.Bounds()
+		x0, y0 := bounds.Min.X+int(tile.X), bounds.Min.Y+int(tile.Y)
+		x1, y1 := min(x0+int(tile.W), bounds.Max.X), min(y0+int(tile.H), bounds.Max.Y)
+
+		for y := y0; y < y1; y += blankStride {
+			for x := x0; x < x1; x += blankStride {
+				total += uint64(diff(grey(first.At(x, y)), grey(second.At(x, y))))
+				samples++
+			}
+		}
+	}
+
+	return samples > 0 && total/samples <= settleRange
+}
+
+func grey(c color.Color) uint32 {
+	r, g, b, _ := c.RGBA()
+	return (r*299 + g*587 + b*114) / 1000
+}
+
+func diff(a, b uint32) uint32 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }
 
 // uniform reports whether a tile is all one colour, give or take the noise a
