@@ -80,7 +80,7 @@ func browserFlags(fs *flag.FlagSet) (*browser.Options, *string, *string) {
 	mode := fs.String("display", string(display.Virtual),
 		"where Chrome draws: virtual (an Xvfb of our own, nothing on screen) or host (your session, visible)")
 	fs.StringVar(&opts.ExecPath, "chrome", "", "path to the Chrome binary (default: autodetect)")
-	fs.StringVar(&opts.Proxy, "proxy", "", "proxy passed to Chrome, e.g. http://user:pass@host:port")
+	fs.StringVar(&opts.Proxy, "proxy", "", "go out through this proxy, e.g. http://user:pass@host:port or socks5://host:port")
 	return opts, screen, mode
 }
 

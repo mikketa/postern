@@ -16,12 +16,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/emulation"
+	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -56,7 +58,12 @@ type Options struct {
 	// ExecPath overrides Chrome autodetection.
 	ExecPath string
 
-	// Proxy is passed to --proxy-server, e.g. "http://user:pass@host:port".
+	// Proxy is where Chrome goes out through, as "http://host:port",
+	// "socks5://host:port" or a bare "host:port". A password may be given as
+	// "http://user:pass@host:port": Chrome cannot take one on the command
+	// line, so it is stripped off and replayed over CDP instead. Which address
+	// a solve comes from is the largest single factor in whether reCAPTCHA
+	// hands over a token.
 	Proxy string
 
 	// Env adds environment entries for the Chrome process, which is how a
@@ -85,6 +92,50 @@ type Browser struct {
 	mu         sync.Mutex
 	uaResolved bool
 	uaOverride string
+
+	// proxyUser and proxyPass are what Chrome could not be told on the command
+	// line; see splitProxy. Empty for a proxy that wants no password, and for
+	// no proxy at all.
+	proxyUser string
+	proxyPass string
+}
+
+// splitProxy separates the address Chrome is given from the credentials it
+// cannot use.
+//
+// --proxy-server takes no password. Chrome drops whatever is in front of the
+// @, asks the proxy anyway, gets 407 back, and puts up the sign-in dialog that
+// a browser nobody is sitting at will never answer — so the page hangs and the
+// only sign of it is a navigation that never finishes. The credentials have to
+// be replayed over CDP instead, which is what Browser holds them for. Keeping
+// them out of the command line is worth something on its own: /proc is
+// world-readable, so a password in a flag is a password every account on the
+// machine can read.
+//
+// A bare "host:port" is accepted because that is the form proxy lists come in;
+// without a scheme url.Parse reads the whole thing as a path.
+func splitProxy(proxy string) (address, user, pass string, err error) {
+	if proxy == "" {
+		return "", "", "", nil
+	}
+
+	scheme := ""
+	rest := proxy
+	if at := strings.Index(proxy, "://"); at >= 0 {
+		scheme, rest = proxy[:at+3], proxy[at+3:]
+	}
+
+	parsed, err := url.Parse("//" + rest)
+	if err != nil {
+		return "", "", "", fmt.Errorf("proxy %q: %w", proxy, err)
+	}
+	if parsed.User != nil {
+		user = parsed.User.Username()
+		pass, _ = parsed.User.Password()
+		parsed.User = nil
+	}
+
+	return scheme + strings.TrimPrefix(parsed.String(), "//"), user, pass, nil
 }
 
 // Launch starts Chrome. The process lives until Close is called or ctx is done.
@@ -122,8 +173,12 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 	if opts.ExecPath != "" {
 		flags = append(flags, chromedp.ExecPath(opts.ExecPath))
 	}
-	if opts.Proxy != "" {
-		flags = append(flags, chromedp.ProxyServer(opts.Proxy))
+	proxyAddress, proxyUser, proxyPass, err := splitProxy(opts.Proxy)
+	if err != nil {
+		return nil, fmt.Errorf("browser: %w", err)
+	}
+	if proxyAddress != "" {
+		flags = append(flags, chromedp.ProxyServer(proxyAddress))
 	}
 	if len(opts.Env) > 0 {
 		flags = append(flags, chromedp.Env(opts.Env...))
@@ -147,6 +202,8 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 		allocCancel:   allocCancel,
 		width:         opts.ScreenWidth,
 		height:        opts.ScreenHeight,
+		proxyUser:     proxyUser,
+		proxyPass:     proxyPass,
 	}, nil
 }
 
@@ -189,11 +246,63 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
 		cancel()
 	}
 
+	if err := b.answerProxy(tabCtx); err != nil {
+		closeTab()
+		return nil, nil, err
+	}
+
 	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), bypassCSP(), installPatches()); err != nil {
 		closeTab()
 		return nil, nil, fmt.Errorf("browser: open tab: %w", err)
 	}
 	return tabCtx, closeTab, nil
+}
+
+// answerProxy signs the tab in to an authenticated proxy.
+//
+// Which address a solve goes out from is not a detail. Measured over one
+// evening on one connection, unchanged code went from three tokens in five to
+// none in five after about twenty-five solves — reputation, not logic. The way
+// out of that is somebody else's address, and a proxy worth using wants a
+// password, which Chrome cannot be handed on the command line (see splitProxy):
+// it asks, gets 407, and raises a dialog no one is there to fill in. Without
+// this the navigation dies as ERR_INVALID_AUTH_CREDENTIALS.
+//
+// Answering means turning on Fetch, and Fetch pauses every request whether or
+// not it is the one being challenged, so each one has to be waved through. That
+// is a round trip per request, which is why it is only turned on when there is
+// actually a password to give.
+func (b *Browser) answerProxy(ctx context.Context) error {
+	if b.proxyUser == "" && b.proxyPass == "" {
+		return nil
+	}
+
+	user, pass := b.proxyUser, b.proxyPass
+	chromedp.ListenTarget(ctx, func(event any) {
+		// Both arms run in their own goroutine: the listener is called on the
+		// connection's read loop, and issuing a command from there would wait
+		// for a reply that cannot be read until the listener returns.
+		switch e := event.(type) {
+		case *fetch.EventAuthRequired:
+			go func() {
+				_ = chromedp.Run(ctx, fetch.ContinueWithAuth(e.RequestID,
+					&fetch.AuthChallengeResponse{
+						Response: fetch.AuthChallengeResponseResponseProvideCredentials,
+						Username: user,
+						Password: pass,
+					}))
+			}()
+		case *fetch.EventRequestPaused:
+			go func() {
+				_ = chromedp.Run(ctx, fetch.ContinueRequest(e.RequestID))
+			}()
+		}
+	})
+
+	if err := chromedp.Run(ctx, fetch.Enable().WithHandleAuthRequests(true)); err != nil {
+		return fmt.Errorf("browser: sign in to the proxy: %w", err)
+	}
+	return nil
 }
 
 // bypassCSP lets postern render its own widget on pages that forbid it.
