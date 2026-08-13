@@ -268,7 +268,9 @@ for zero-shot CLIP. Each head also carries **the bar it should be read at**, fou
 fitting without one grid at a time and keeping whichever bar costs fewest mistakes — a
 number fixed in the solver cannot suit every head, and this one was wrong: held out against
 two grids from a later run it had never seen, the head missed nothing and ticked six
-squares in excess, which its own bar halved to three. More labelled grids is what moves it
+squares in excess, which its own bar halved to three. Every tile is also learned from
+twice, once mirrored — a crossing in a mirror is still a crossing, so the label carries
+over for nothing and the excess fell again, to two. More labelled grids is what moves it
 further. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
 installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.

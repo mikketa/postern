@@ -85,7 +85,7 @@ def encode(vision, images):
     return embeds / np.linalg.norm(embeds, axis=-1, keepdims=True)
 
 
-def read(panels, labels, vision):
+def read(panels, labels, vision, augment=True):
     """Every labelled tile, as an embedding and a yes or no."""
     embeds, wanted, source = [], [], []
     for stem, tiles in labels.items():
@@ -100,9 +100,24 @@ def read(panels, labels, vision):
         boxes = [tuple(int(v) for v in part.split(",")) for part in meta["tiles"].split(";")]
 
         panel = Image.open(shot).convert("RGB")
-        embeds.append(encode(vision, [panel.crop((x, y, x + w, y + h)) for x, y, w, h in boxes]))
-        wanted += [1.0 if i in tiles else 0.0 for i in range(len(boxes))]
-        source += [stem] * len(boxes)
+        crops = [panel.crop((x, y, x + w, y + h)) for x, y, w, h in boxes]
+
+        # Each tile twice, the second one mirrored. A crossing seen in a mirror
+        # is still a crossing, so the label carries over for free and the head
+        # gets twice the tiles to learn the shape from — measured on grids it
+        # had never seen, three ticks in excess became two.
+        #
+        # Both copies answer to the same grid, which matters: the bar below is
+        # calibrated by leaving one grid out, and a mirrored copy left in while
+        # its original is taken out is the same leak as validating a grid on its
+        # own reloads. Kept apart, it chose a bar that was worse, not better.
+        versions = [crops]
+        if augment:
+            versions.append([c.transpose(Image.FLIP_LEFT_RIGHT) for c in crops])
+        for images in versions:
+            embeds.append(encode(vision, images))
+            wanted += [1.0 if i in tiles else 0.0 for i in range(len(boxes))]
+            source += [stem] * len(boxes)
 
     if not embeds:
         raise SystemExit("nothing to train on")
@@ -205,7 +220,9 @@ def main():
 
     if held:
         print("held out:")
-        missing, excess = score(weights, bias, *read(args.panels, held, vision),
+        # Not augmented: a mirrored copy is for learning from, not for being
+        # marked on. Counting it would report every mistake twice.
+        missing, excess = score(weights, bias, *read(args.panels, held, vision, augment=False),
                                 bar=bar)
         print(f"held out: -{missing} +{excess}")
     else:
