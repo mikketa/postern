@@ -14,6 +14,11 @@ on one series of grids and tested on another so that no tile appeared in both:
 five ticks short and one in excess, against roughly four in excess per grid for
 zero-shot CLIP.
 
+It is not calibrated, and more tiles is the only thing that fixes that. Tested
+against two grids from a later run that it had never seen, the head fitted here
+missed nothing and ticked six squares in excess — it knows what a crossing looks
+like and not how sure to be about it. Every grid you label moves that.
+
     # 1. save some grids. postern writes one per round with -save-panels.
     postern solve -kind recaptcha-v2 -url ... -sitekey ... \\
         -image-solver ... -save-panels ~/panels
@@ -113,7 +118,7 @@ def fit(embeds, wanted):
     return weights, bias
 
 
-def score(weights, bias, embeds, wanted, source, share=0.70, floor=0.30):
+def score(weights, bias, embeds, wanted, source, share=0.70, floor=0.50):
     """What the head gets right and wrong, grid by grid."""
     predicted = 1.0 / (1.0 + np.exp(-(embeds @ weights + bias)))
     missing = excess = 0
