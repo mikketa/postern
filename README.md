@@ -26,7 +26,7 @@ Measured, not asserted. Every row was run against the live service.
 | Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens, 13.7s total**, median 4s |
 | **reCAPTCHA v3** | token, ~4s |
 | **Turnstile**, dummy always-passes keys, visible and invisible | token, both |
-| **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token** — the box is ticked three times and nothing comes back |
+| **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token**, and postern now says why: the vendor never rendered its frame |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-vision.py` |
@@ -455,11 +455,19 @@ they render no iframe, only the container and the hidden field. They prove the p
 works. They say nothing about a production sitekey, which is why the table at the top of
 this file was measured against one.
 
-`3x00000000000000000000FF` is the exception and it does not pass. Postern finds the widget
-and ticks the box — three times, seconds apart, which the log now says out loud — and no
-token comes back. That key exists to force the interactive challenge on screen; nothing
-here gets through it, and the production Turnstile sitekey in the table above is answered
-without ever reaching that state.
+`3x00000000000000000000FF` is the exception and it does not pass — and the reason is worth
+having, because it is not that the challenge was too hard. Measured: the widget is clicked
+three times and **Turnstile never renders its own iframe at all**, so every click lands on
+postern's container with nothing behind it. There was never anything on screen to answer.
+
+Postern says that now rather than reporting a bare timeout:
+
+    solver: no token after 40s — the widget was clicked 3 times but turnstile never
+    rendered its own frame, so there was nothing on screen to answer.
+
+Which is the useful message for any case where the vendor's script does not put a widget
+up: a key like this one, a blocked script, a CSP that was not bypassed. The production
+Turnstile sitekey in the table above is answered without ever reaching that state.
 
 Validate a dummy token with the matching dummy secret:
 

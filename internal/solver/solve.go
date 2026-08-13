@@ -189,6 +189,11 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 
 	clicks := 0
 	attempts := 0
+	// Whether the vendor ever rendered its own frame. A widget that solves
+	// itself never needs to, so this is not a failure on its own — but at the
+	// end of a solve that produced nothing, it is the difference between "the
+	// challenge beat us" and "there was never anything on screen to answer".
+	sawVendorFrame := false
 	resets := 0
 	rounds := 0
 	var lastClick time.Time
@@ -199,6 +204,13 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// A parent cancellation is not the same failure as running out of
 			// time on the challenge; only the latter is worth reporting as one.
 			if errors.Is(context.Cause(tabCtx), context.DeadlineExceeded) {
+				if clicks > 0 && !sawVendorFrame {
+					return nil, fmt.Errorf("solver: no token after %s — the widget was clicked "+
+						"%d times but %s never rendered its own frame, so there was nothing on "+
+						"screen to answer. A sitekey that forces an interactive challenge does "+
+						"this, and so does a vendor script the page would not load",
+						timeout, clicks, req.kindOrDefault())
+				}
 				return nil, fmt.Errorf("solver: no token after %s", timeout)
 			}
 			return nil, tabCtx.Err()
@@ -298,8 +310,15 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				} else {
 					clicks++
 					lastClick = time.Now()
+					var box *rect
+					if err := chromedp.Run(tabCtx,
+						chromedp.Evaluate(rectScript(p.frameHost), &box)); err != nil || box == nil {
+						box = &rect{}
+					}
 					log.Info("ticked the checkbox", "clicks", clicks,
-						"after", time.Since(start).Round(time.Millisecond))
+						"after", time.Since(start).Round(time.Millisecond),
+						"widget", fmt.Sprintf("%.0fx%.0f at %.0f,%.0f iframe=%v",
+							box.W, box.H, box.X, box.Y, box.Iframe))
 				}
 			}
 		}
