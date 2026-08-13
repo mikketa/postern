@@ -404,6 +404,30 @@ Be aware of what a server takes back:
   browser does. Expect challenges to be served more often and to be harder from a hosting
   range than from a residential connection. `-proxy` exists for this reason.
 
+## Reputation, which decides more than the solver does
+
+Everything above is about making one solve work. This is about making the hundredth work,
+and it is where reCAPTCHA v2 is actually won or lost — the evening that produced the
+numbers at the top of this file ended at 0/5 with a better solver than it started at 3/5
+with.
+
+What postern does on its own:
+
+- **The profile is kept.** `-profile` defaults to a stable directory precisely so cookies,
+  history and the vendor's own `_GRECAPTCHA` accumulate. A fresh profile per solve throws
+  that away every time, and it is the single easiest way to make postern look worse than
+  it is — which is exactly the mistake the measurements above were first made with.
+- **It stops when it is no longer being graded.** Past twelve picture grids in one solve,
+  postern gives up and says the address is what is being refused, rather than spending the
+  rest of the timeout and reporting "no token" as though the answers were wrong.
+
+What it cannot do for you, and there is no clever way around either:
+
+- **Where the requests come from.** A residential address is worth more than any
+  fingerprint work. `-proxy` takes one.
+- **How fast you ask.** Twenty-five solves in an evening from one address was enough to go
+  from 3/5 to nothing, on a home connection. Spread the work, or spread the addresses.
+
 ## Scope
 
 Postern exists for automating things you are allowed to automate: your own sites, your
