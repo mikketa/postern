@@ -84,6 +84,19 @@ func Click(from, to Point) chromedp.ActionFunc {
 	}
 }
 
+// Move walks the pointer from one point to the other without clicking.
+//
+// It is what a person does before deciding, and it is also the only thing that
+// reliably gets a page repainted: under a virtual display nothing composites a
+// new frame while the page sits idle, so an animation that was halfway through
+// stays halfway through — and a screenshot taken then shows a panel still
+// fading in over the page behind it.
+func Move(from, to Point) chromedp.ActionFunc {
+	return func(ctx context.Context) error {
+		return move(ctx, from, to)
+	}
+}
+
 // move traces a curved, unevenly paced path between two points.
 func move(ctx context.Context, from, to Point) error {
 	distance := math.Hypot(to.X-from.X, to.Y-from.Y)

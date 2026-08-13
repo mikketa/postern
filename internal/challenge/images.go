@@ -58,6 +58,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/mikketa/postern/internal/input"
@@ -153,6 +154,11 @@ const (
 	blankRange  = 900
 	blankStride = 4
 
+	// repaintTimeout is how long to wait for a second photograph before taking
+	// the silence to mean the picture has stopped changing. Generous against a
+	// capture that answers in about 100ms when there is anything to answer with.
+	repaintTimeout = 1500 * time.Millisecond
+
 	// settleRange is how far two photographs of the same grid may differ, on
 	// average and out of 65535, and still count as the same picture. Generous
 	// enough to ignore a repainted cursor or a hairline of antialiasing, and far
@@ -241,7 +247,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			"grid", frame.View.Columns(),
 			"notice", frame.View.Notice)
 
-		points, err := inspect(ctx, frame, opts)
+		points, err := inspect(ctx, frame, opts, log)
 		if errors.Is(err, errPass) {
 			// Reloading asks for a different challenge, but reCAPTCHA is under
 			// no obligation to change the subject and often does not: it has
@@ -393,13 +399,28 @@ func ready(ctx context.Context, frame *Frame) error {
 // photograph shows that it was taken mid-fade. Two do — a fading grid changes
 // between them and a finished one does not — so this takes photographs until
 // two in a row agree.
-func inspect(ctx context.Context, frame *Frame, opts Options) ([]point, error) {
+func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) ([]point, error) {
+	// Get the page painted before the first photograph too. The panel fades in
+	// over the page, and under a virtual display that fade stops wherever it
+	// was when the last frame was composited — measured, the opening grid of
+	// every run came back washed out and mixed with the page behind it.
+	if err := stir(ctx, frame); err != nil {
+		return nil, err
+	}
+
+	started := time.Now()
 	shot, err := capture(ctx, frame)
 	if err != nil {
 		return nil, err
 	}
+	log.Debug("grid photographed", "attempt", 0, "took", time.Since(started))
 
-	for range paintAttempts {
+	for attempt := range paintAttempts {
+		// Get something painted before looking again, or the page will sit
+		// exactly as it is and the second photograph will never arrive.
+		if err := stir(ctx, frame); err != nil {
+			return nil, err
+		}
 		if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
 			return nil, err
 		}
@@ -410,12 +431,30 @@ func inspect(ctx context.Context, frame *Frame, opts Options) ([]point, error) {
 			return nil, nil
 		}
 
-		again, err := capture(ctx, frame)
+		started := time.Now()
+		bounded, cancel := context.WithTimeout(ctx, repaintTimeout)
+		again, err := capture(bounded, frame)
+		cancel()
+
+		// A screenshot request is only answered once the page has a frame to
+		// give. A grid that has finished fading in has nothing left to paint,
+		// so the request waits — measured, well past the whole timeout for the
+		// solve. That silence is the answer: nothing has moved.
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			log.Debug("nothing repainted", "attempt", attempt+1)
+			if !blank(shot, frame.View.Tiles) {
+				break
+			}
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
+
 		steady := settled(shot, again, frame.View.Tiles)
 		shot = again
+		log.Debug("grid photographed", "attempt", attempt+1, "steady", steady,
+			"blank", blank(shot, frame.View.Tiles), "took", time.Since(started))
 		if steady && !blank(shot, frame.View.Tiles) {
 			break
 		}
@@ -645,6 +684,43 @@ func click(ctx context.Context, frame *Frame, x, y float64) error {
 	return chromedp.Run(ctx, input.Click(origin, target))
 }
 
+// stir moves the pointer across the panel without clicking anything, to get the
+// page painted.
+//
+// Under a virtual display nothing composites a frame while the page is idle, so
+// the panel's opening animation stops partway and stays there: measured, the
+// first grid of every run came back washed out, mixed with the page behind it,
+// while every later grid — after the pointer had moved to click something — was
+// clean. Moving the pointer is what a person does before choosing anyway.
+func stir(ctx context.Context, frame *Frame) error {
+	fromX, fromY := frame.Point(frame.View.Width+70, frame.View.Height+50)
+	toX, toY := frame.Point(frame.View.Width/2, frame.View.Height/2)
+
+	if err := chromedp.Run(ctx, input.Move(
+		input.Point{X: fromX, Y: fromY},
+		input.Point{X: toX, Y: toY},
+	)); err != nil {
+		return err
+	}
+
+	// Pointer events change nothing on screen — no cursor is composited under
+	// a virtual display — so the frozen fade would stay frozen. Resizing the
+	// view by a pixel and back is a layout change, which has to be painted.
+	var size struct {
+		W int64 `json:"w"`
+		H int64 `json:"h"`
+	}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(
+		`({ w: window.innerWidth, h: window.innerHeight })`, &size)); err != nil {
+		return err
+	}
+
+	return chromedp.Run(ctx,
+		emulation.SetDeviceMetricsOverride(size.W, size.H+1, 1, false),
+		emulation.ClearDeviceMetricsOverride(),
+	)
+}
+
 // capture screenshots just the panel, so the solver sees the prompt and the
 // grid and nothing else.
 //
@@ -671,6 +747,13 @@ func capture(ctx context.Context, frame *Frame) ([]byte, error) {
 		var err error
 		shot, err = page.CaptureScreenshot().
 			WithFormat(page.CaptureScreenshotFormatPng).
+			// From the renderer rather than the window's surface. A surface
+			// capture is only answered when the compositor has a fresh frame
+			// to give, and a grid that has finished fading in has nothing left
+			// to paint — measured, that request went unanswered past the whole
+			// timeout for the solve, on a page that answered everything else
+			// in milliseconds.
+			WithFromSurface(false).
 			WithClip(&page.Viewport{
 				X:      x + scroll.X,
 				Y:      y + scroll.Y,
