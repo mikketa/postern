@@ -44,6 +44,25 @@ at all, answering *"Your computer or network may be sending automated queries"*.
 other lever for reCAPTCHA v2 is **reputation** — a profile with history behind it, and an
 IP that is not a datacenter — which is not something a solver can manufacture.
 
+How much it dominates is visible in the runs. Counting the rounds each one took — a round
+being one grid read, answered and submitted, six of which is one full pass of the solve
+loop — twenty runs separate perfectly:
+
+| Rounds in the run | Token |
+| --- | --- |
+| 6 | **5 out of 5** |
+| 12 | **2 out of 2** |
+| 2, 3, 4, 5, 8, 11, 13, 15, 17, 19, 20 | none, 0 out of 13 |
+
+Every token came from a run that finished in exactly one or two full passes. Not one came
+from a run that took some other number of rounds, which is not what "the model was right
+more often" looks like — it is what a decision made before the pictures looked like.
+
+This is also why campaigns run back to back are not comparable. After an hour of solving
+from one address, the same build is served more rounds than it was at the start. Comparing
+two solvers means interleaving their runs, not running one campaign after the other — and
+the numbers below that compare anything were measured that way.
+
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
 ## How it works
