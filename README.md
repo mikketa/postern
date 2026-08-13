@@ -185,7 +185,7 @@ So `solver-vision.py` asks whichever will actually answer, in that order:
 | --- | --- | --- |
 | **RT-DETR on COCO** | buses, cars, bicycles, motorcycles, fire hydrants, parking meters, traffic lights — **73%** of what was served | exact on six grids of six |
 | ↳ *as published, fixed at 640px* | the same | 3 short, 2 in excess over the same eight grids |
-| **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 5 short, 1 in excess over 7 grids |
+| **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 1 in excess over a six-round challenge it had never seen |
 | **SegFormer on ADE20K** | bridges, mountains, stairs, palm trees, on a 4x4 | 1 short, 1 in excess |
 | **CLIP** | anything at all, badly | roughly 4 ticks in excess per grid |
 
@@ -262,16 +262,20 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
     --models ~/.cache/postern-vision --hold <a panel series to test on>
 ```
 
-Fitted on 81 tiles from 9 grids and validated across independent series, so that no tile
-appeared in both: **5 ticks short and 1 in excess**, against roughly 4 in excess per grid
-for zero-shot CLIP. Each head also carries **the bar it should be read at**, found by
-fitting without one grid at a time and keeping whichever bar costs fewest mistakes — a
-number fixed in the solver cannot suit every head, and this one was wrong: held out against
-two grids from a later run it had never seen, the head missed nothing and ticked six
-squares in excess, which its own bar halved to three. Every tile is also learned from
-twice, once mirrored — a crossing in a mirror is still a crossing, so the label carries
-over for nothing and the excess fell again, to two. More labelled grids is what moves it
-further. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
+Fitted on 84 tiles from 15 grids and validated on a whole challenge from a later run, so
+that no tile appeared in both: **nothing missed and 1 tick in excess** over its six rounds,
+against roughly 4 in excess per grid for zero-shot CLIP. Three things got it there, each
+measured against the same held-out challenge. Each head carries **the bar it should be read
+at**, found by fitting without one grid at a time and keeping whichever bar costs fewest
+mistakes — a number fixed in the solver cannot suit every head, and this one was wrong: the
+head missed nothing and ticked six squares in excess, which its own bar halved to three.
+Every tile is learned from twice, once mirrored — a crossing in a mirror is still a
+crossing, so the label carries over for nothing. And **repeated tiles are thrown away**: a
+round only replaces the squares you ticked, so a six-round challenge is six copies of the
+same negatives around one or two new pictures, which buries the positives and lets a round
+be scored on tiles it was fitted on. Dropping them took 3 in excess to 1, and it is worth
+labelling every round precisely because the repeats cost nothing. More labelled grids is
+what moves it further. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
 installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
 
