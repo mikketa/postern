@@ -59,6 +59,14 @@ const (
 	navigateAttempts   = 3
 	navigateRetryAfter = 500 * time.Millisecond
 
+	// gradedRounds is how many picture grids are worth answering before
+	// concluding that the answers are not what is being judged. Twelve, from
+	// twenty measured runs: every token came from a run that finished in six
+	// or twelve rounds, and none at all from the thirteen runs that took some
+	// other number — correct answers past that point were handed another grid
+	// just the same.
+	gradedRounds = 12
+
 	// maxResets bounds how many times an expired challenge is started over.
 	// Two, because the remaining budget is what really limits this — a reset
 	// costs a fresh checkbox and whatever the widget serves next, and if that
@@ -175,6 +183,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	clicks := 0
 	attempts := 0
 	resets := 0
+	rounds := 0
 	var lastClick time.Time
 
 	for {
@@ -237,7 +246,8 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					}
 
 					attempts++
-					err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
+					done, err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
+					rounds += done
 					if errors.Is(err, context.DeadlineExceeded) {
 						// Running out of time mid-challenge is the same failure
 						// as running out of time waiting, and reads better said
@@ -246,6 +256,20 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					}
 					if err != nil {
 						return nil, fmt.Errorf("solver: %w", err)
+					}
+
+					// Past a certain point reCAPTCHA is not grading answers any
+					// more. Measured over twenty runs: every token came from a
+					// run that finished in six or twelve rounds, and not one
+					// came from a longer one — correct answers got another grid
+					// just the same. Carrying on spends the rest of the budget
+					// to arrive at the same place, and reports "no token" for
+					// something that was never about the answers.
+					if rounds > gradedRounds {
+						return nil, fmt.Errorf("solver: %d picture grids and still asking — "+
+							"this address or profile is what is being refused, not the answers. "+
+							"A profile with history, or an IP that is not a datacenter, is the "+
+							"lever here; see the README on reputation", rounds)
 					}
 
 					// The verdict is not ours to read: a right answer produces

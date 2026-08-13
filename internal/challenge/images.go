@@ -147,13 +147,16 @@ var errPass = errors.New("challenge: solver passed")
 // every correct tile with a fresh picture and is only finished when none of
 // what is on screen matches any more — pressing verify before then submits a
 // half-answer, which reCAPTCHA rejects as surely as a wrong one.
-func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger) error {
+func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger) (int, error) {
 	if solverCmd == "" {
-		return fmt.Errorf("challenge: no image solver configured")
+		return 0, fmt.Errorf("challenge: no image solver configured")
 	}
 
 	passes := 0
 	stuck := 0
+	// rounds is how many grids this challenge took, which is the caller's
+	// only measure of how much reCAPTCHA is asking for.
+	rounds := 0
 
 	// fresh presses the reload button and insists on getting somewhere. A panel
 	// that keeps handing back the same grid is not going to be talked round,
@@ -177,16 +180,17 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 	}
 
 	for round := 0; round < maxRounds; round++ {
+		rounds = round + 1
 		// The panel closes the moment the challenge is over, either because it
 		// was answered or because the widget gave up on it. Carrying on would
 		// photograph whatever the page has where the panel used to be.
 		if !frame.Open() {
 			log.Info("panel closed", "round", round)
-			return nil
+			return rounds, nil
 		}
 
 		if err := ready(ctx, frame); err != nil {
-			return err
+			return rounds, err
 		}
 
 		before := frame.View.Pictures()
@@ -205,20 +209,20 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			// solver has already said it cannot answer.
 			passes++
 			if passes >= maxPasses {
-				return fmt.Errorf("challenge: the solver has passed on %q %d times running "+
+				return rounds, fmt.Errorf("challenge: the solver has passed on %q %d times running "+
 					"and reCAPTCHA keeps asking — it needs a model that answers this one",
 					frame.View.Prompt, passes)
 			}
 
 			log.Info("solver passed, asking for another challenge", "passes", passes)
 			if reloadErr := fresh(before); reloadErr != nil {
-				return reloadErr
+				return rounds, reloadErr
 			}
 			continue
 		}
 		passes = 0
 		if err != nil {
-			return err
+			return rounds, err
 		}
 		log.Info("solver answered", "tiles", len(points))
 
@@ -229,7 +233,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			// and takes the widget with it. Coordinates given in tile indices
 			// rather than pixels are the usual way to end up here.
 			if p.X < 0 || p.Y < 0 || p.X > frame.View.Width || p.Y > frame.View.Height {
-				return fmt.Errorf("challenge: solver returned %.0f,%.0f, outside the "+
+				return rounds, fmt.Errorf("challenge: solver returned %.0f,%.0f, outside the "+
 					"%.0fx%.0f panel it was given", p.X, p.Y, frame.View.Width, frame.View.Height)
 			}
 
@@ -247,11 +251,11 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			}
 
 			if err := click(ctx, frame, p.X, p.Y); err != nil {
-				return fmt.Errorf("challenge: click tile: %w", err)
+				return rounds, fmt.Errorf("challenge: click tile: %w", err)
 			}
 			clicked++
 			if err := input.Pause(ctx, betweenClicksMin, betweenClicksMax); err != nil {
-				return err
+				return rounds, err
 			}
 		}
 		if clicked < len(points) {
@@ -275,7 +279,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			log.Info("nothing new on a grid already refused, asking for another",
 				"notice", frame.View.Notice, "named", len(points))
 			if err := fresh(before); err != nil {
-				return err
+				return rounds, err
 			}
 			continue
 		}
@@ -287,7 +291,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 		if clicked > 0 {
 			replaced, err := await(ctx, frame, before, replaceAttempts)
 			if err != nil {
-				return err
+				return rounds, err
 			}
 			if replaced {
 				continue
@@ -296,19 +300,19 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 
 		// Nothing left to click: submit, and wait to be told.
 		if err := Verify(ctx, frame, log); err != nil {
-			return err
+			return rounds, err
 		}
 		if _, err := await(ctx, frame, before, verdictAttempts); err != nil {
-			return err
+			return rounds, err
 		}
 		if !frame.Open() {
 			log.Info("challenge answered", "rounds", round+1)
-			return nil
+			return rounds, nil
 		}
 		log.Info("another challenge", "notice", frame.View.Notice)
 	}
 
-	return nil
+	return rounds, nil
 }
 
 // ready waits for the grid to be worth looking at: pictures loaded, nothing
