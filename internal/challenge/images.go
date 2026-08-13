@@ -159,6 +159,11 @@ const (
 	// capture that answers in about 100ms when there is anything to answer with.
 	repaintTimeout = 1500 * time.Millisecond
 
+	// settleWait is how long to let the layout settle after provoking a
+	// repaint, before measuring where anything is.
+	settleWaitMin = 120
+	settleWaitMax = 260
+
 	// settleRange is how far two photographs of the same grid may differ, on
 	// average and out of 65535, and still count as the same picture. Generous
 	// enough to ignore a repainted cursor or a hairline of antialiasing, and far
@@ -401,11 +406,23 @@ func ready(ctx context.Context, frame *Frame) error {
 // two in a row agree.
 func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) ([]point, error) {
 	// Get the page painted before the first photograph too. The panel fades in
-	// over the page, and under a virtual display that fade stops wherever it
-	// was when the last frame was composited — measured, the opening grid of
-	// every run came back washed out and mixed with the page behind it.
+	// over the page, and under a virtual display that fade stops wherever it was
+	// when the last frame was composited — measured, the opening grid of every
+	// run came back at partial opacity with the form behind it showing through,
+	// which is a grid nothing can answer and nothing about the document says is
+	// wrong.
+	//
+	// Everything is measured again afterwards, because provoking a repaint
+	// means changing the layout and the panel does not always come back exactly
+	// where it was.
 	if err := stir(ctx, frame); err != nil {
 		return nil, err
+	}
+	if err := frame.Reread(ctx); err != nil {
+		return nil, err
+	}
+	if !frame.Open() {
+		return nil, nil
 	}
 
 	started := time.Now()
@@ -416,8 +433,8 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 	log.Debug("grid photographed", "attempt", 0, "took", time.Since(started))
 
 	for attempt := range paintAttempts {
-		// Get something painted before looking again, or the page will sit
-		// exactly as it is and the second photograph will never arrive.
+		// And again before looking again, or the page will sit exactly as it is
+		// and the second photograph will never be answered.
 		if err := stir(ctx, frame); err != nil {
 			return nil, err
 		}
@@ -704,8 +721,13 @@ func stir(ctx context.Context, frame *Frame) error {
 	}
 
 	// Pointer events change nothing on screen — no cursor is composited under
-	// a virtual display — so the frozen fade would stay frozen. Resizing the
-	// view by a pixel and back is a layout change, which has to be painted.
+	// a virtual display — so on their own the frozen fade stays frozen. What
+	// does get the page painted is a change to the layout, and a view one pixel
+	// taller and back is the smallest one there is.
+	//
+	// Measured, in the order they were tried: moving the pointer, scrolling a
+	// pixel, asking for a screencast, and overriding the page's backdrop colour
+	// all left the fade exactly where it was. Only the resize moved it.
 	var size struct {
 		W int64 `json:"w"`
 		H int64 `json:"h"`
@@ -715,10 +737,18 @@ func stir(ctx context.Context, frame *Frame) error {
 		return err
 	}
 
-	return chromedp.Run(ctx,
+	if err := chromedp.Run(ctx,
 		emulation.SetDeviceMetricsOverride(size.W, size.H+1, 1, false),
 		emulation.ClearDeviceMetricsOverride(),
-	)
+	); err != nil {
+		return err
+	}
+
+	// The panel is laid out again after that, and reCAPTCHA does not always
+	// put it back where it was. Measuring it before it has settled photographs
+	// a rectangle holding half the grid and half the page behind it, which
+	// looks exactly like a solver that cannot see.
+	return input.Pause(ctx, settleWaitMin, settleWaitMax)
 }
 
 // capture screenshots just the panel, so the solver sees the prompt and the
@@ -747,13 +777,6 @@ func capture(ctx context.Context, frame *Frame) ([]byte, error) {
 		var err error
 		shot, err = page.CaptureScreenshot().
 			WithFormat(page.CaptureScreenshotFormatPng).
-			// From the renderer rather than the window's surface. A surface
-			// capture is only answered when the compositor has a fresh frame
-			// to give, and a grid that has finished fading in has nothing left
-			// to paint — measured, that request went unanswered past the whole
-			// timeout for the solve, on a page that answered everything else
-			// in milliseconds.
-			WithFromSurface(false).
 			WithClip(&page.Viewport{
 				X:      x + scroll.X,
 				Y:      y + scroll.Y,
