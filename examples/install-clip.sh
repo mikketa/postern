@@ -6,10 +6,15 @@
 #     postern solve -kind recaptcha-v2 -url ... -sitekey ... \
 #         -image-solver ~/.cache/postern-clip/solve
 #
-# A second argument picks the model: patch32 (the default) or patch16, which
-# sees noticeably more of a deliberately degraded photograph and costs about
-# four times the CPU per grid. The threshold in solver-clip.py is calibrated for
-# patch32, so the wrapper sets POSTERN_CLIP_CONFIDENCE for the other one.
+# A second argument picks the model. patch16 is the default because it is what
+# the 4x4 pass needs: those squares are found by covering them up and seeing how
+# much of the picture goes with them, and patch32 is not sure enough about
+# anything for covering a square to move its score. It costs roughly four times
+# the CPU per grid, which is seconds against a budget of ninety.
+#
+# patch32 is there for a machine that cannot spare that. It falls back to
+# scoring squares one at a time, which ticks more squares than it should on a
+# 4x4 — measured, five ticks in excess where patch16 has one.
 #
 # Nothing here is required to use postern — it ships no vision model and works
 # without one, reporting picture challenges rather than answering them. This is
@@ -17,17 +22,15 @@
 set -eu
 
 DIR=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/postern-clip}
-MODEL=${2:-patch32}
+MODEL=${2:-patch16}
 SCRIPT=$(cd "$(dirname "$0")" && pwd)/solver-clip.py
 
-# 0.34 for patch32 is where the false ticks and the misses balance out, over
-# saved grids with the answers checked by eye. 0.60 for patch16 is a starting
-# point rather than a measured optimum: that model scores everything higher, and
-# it has not been through the same calibration.
+# Both calibrated over saved grids with the answers checked by eye. LAYOUT
+# forces the one-square-at-a-time path on the model that needs it.
 case $MODEL in
-patch32) CONFIDENCE=0.34 ;;
-patch16) CONFIDENCE=0.60 ;;
-*) echo "unknown model $MODEL, want patch32 or patch16" >&2; exit 1 ;;
+patch16) CONFIDENCE=0.55; LAYOUT=occlusion ;;
+patch32) CONFIDENCE=0.34; LAYOUT=tiles ;;
+*) echo "unknown model $MODEL, want patch16 or patch32" >&2; exit 1 ;;
 esac
 BASE=https://huggingface.co/Xenova/clip-vit-base-$MODEL/resolve/main
 
@@ -63,6 +66,7 @@ cat > solve <<EOF
 #!/bin/sh
 export POSTERN_CLIP_DIR="$DIR"
 export POSTERN_CLIP_CONFIDENCE="$CONFIDENCE"
+export POSTERN_CLIP_LAYOUT="$LAYOUT"
 exec "$DIR/venv/bin/python" "$SCRIPT" "\$@"
 EOF
 chmod +x solve
