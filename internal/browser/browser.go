@@ -272,6 +272,14 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
 // not it is the one being challenged, so each one has to be waved through. That
 // is a round trip per request, which is why it is only turned on when there is
 // actually a password to give.
+//
+// This is the tab's own session, so it covers the page and everything the page
+// loads. A challenge iframe is a target of its own and does not inherit it —
+// Chrome remembers proxy credentials across the network session once they are
+// accepted, so in practice the first sign-in covers what comes after, but that
+// is Chrome's behaviour rather than something proven here. If an out-of-process
+// frame is ever seen failing with ERR_INVALID_AUTH_CREDENTIALS, this is where
+// the second Fetch.enable belongs, on the frame's session.
 func (b *Browser) answerProxy(ctx context.Context) error {
 	if b.proxyUser == "" && b.proxyPass == "" {
 		return nil
