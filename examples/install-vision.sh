@@ -81,6 +81,57 @@ fetch "$BASE/tokenizer.json" clip-tokenizer.json
 #                     opset_version=17, dynamo=False)"
 fetch https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model.onnx segment.onnx
 
+# The object detector, which is asked before either of those and answers most
+# of what reCAPTCHA asks: buses, cars, bicycles, motorcycles, fire hydrants,
+# parking meters and traffic lights were 73% of the challenges served over a
+# night of measuring. RT-DETR r50 on COCO, 45MB quantised.
+#
+# Measured over grids with the answers checked by eye: exactly right on six of
+# them, where scoring tiles with CLIP was nine ticks in excess over three grids
+# and the mask was one short and one over.
+#
+# This published build is compiled for a fixed 640x640 input, which is 6.7x
+# enlargement on a 96-pixel reCAPTCHA tile and costs accuracy: five ticks it
+# should have made, and seven times the CPU. Exporting it yourself gives a build
+# that takes any size, which the solver then feeds 224 for a tile and 320 for a
+# grid. Worth the 2GB of PyTorch if you are running this often:
+#
+#   pip install torch transformers onnx
+#   python -c "
+#   import torch
+#   import transformers.models.rt_detr.modeling_rt_detr as rt
+#   from transformers import AutoModelForObjectDetection
+#   # Its position embedding computes in float64, which ONNX Runtime has no Cos for.
+#   inner = rt.build_2d_sinusoidal_position_embedding
+#   def f32(*a, **k):
+#       real, torch.float64 = torch.float64, torch.float32
+#       try: return inner(*a, **k)
+#       finally: torch.float64 = real
+#   rt.build_2d_sinusoidal_position_embedding = f32
+#   m = AutoModelForObjectDetection.from_pretrained('PekingU/rtdetr_r50vd_coco_o365').eval()
+#   class W(torch.nn.Module):
+#       def __init__(s): super().__init__(); s.m = m
+#       def forward(s, pixel_values):
+#           o = s.m(pixel_values=pixel_values); return o.logits, o.pred_boxes
+#   torch.onnx.export(W(), (torch.zeros(2,3,320,320),), 'detect.onnx',
+#       input_names=['pixel_values'], output_names=['logits', 'pred_boxes'],
+#       dynamic_axes={'pixel_values': {0:'batch', 2:'height', 3:'width'},
+#                     'logits': {0:'batch'}, 'pred_boxes': {0:'batch'}},
+#       opset_version=17, dynamo=False)"
+DETECTOR=https://huggingface.co/onnx-community/rtdetr_r50vd_coco_o365/resolve/main
+fetch "$DETECTOR/onnx/model_quantized.onnx" detect.onnx
+
+# The class numbers the detector answers with mean nothing on their own.
+if [ ! -s detect-labels.json ]; then
+	echo "fetching detect-labels.json"
+	curl -fsSL --retry 3 -o detect-config.json "$DETECTOR/config.json"
+	./venv/bin/python -c "
+import json
+labels = json.load(open('detect-config.json'))['id2label']
+json.dump(labels, open('detect-labels.json', 'w'))"
+	rm -f detect-config.json
+fi
+
 cat > solve <<EOF
 #!/bin/sh
 export POSTERN_CLIP_DIR="$DIR"
