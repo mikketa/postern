@@ -58,7 +58,14 @@ STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
 # How sure to be before ticking a tile. reCAPTCHA punishes a miss and a false
 # positive equally — both fail the grid — so this sits where the two are
 # balanced rather than being generous in either direction.
-CONFIDENCE = 0.34
+#
+# It is calibrated for ViT-B/32, and it does not carry over to another model: a
+# sharper one is more confident about everything, so the same number lets more
+# through. Swapping in ViT-B/16 turned a grid of cars that scored nothing above
+# 0.20 into seven tiles above 0.34, and a bus tile from 0.54 to 0.94 — better
+# sight and a different scale at once. Set POSTERN_CLIP_CONFIDENCE when you
+# change models.
+CONFIDENCE = float(os.environ.get("POSTERN_CLIP_CONFIDENCE") or 0.34)
 
 # For the 4x4 layout, how much of the neighbouring squares to include. One
 # sixteenth of a bus is not a bus to anything that looks at pictures; with a
@@ -261,6 +268,7 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     # each square is shown with its surroundings to be recognisable at all.
     margin = TILE_MARGIN if len(boxes) == 16 else 0.0
     crops = [crop(panel, box, margin) for box in boxes]
+    tight = [crop(panel, box, 0.0) for box in boxes] if margin else None
 
     # One vector for the question and one per thing it might be instead. The
     # question's vector is the average of its phrasings — several ways of asking
@@ -272,12 +280,30 @@ def solve(image_path: str) -> list[tuple[float, float]]:
         *embed_texts(BACKGROUNDS),
     ])
 
-    scores = embed_images(session("clip-vision.onnx"), crops) @ texts.T
+    vision = session("clip-vision.onnx")
 
-    # Softmax across those: how much better the answer fits this tile than any
-    # of the things it might otherwise be.
-    scaled = np.exp(100.0 * (scores - scores.max(axis=-1, keepdims=True)))
-    confidence = (scaled / scaled.sum(axis=-1, keepdims=True))[:, 0]
+    def probability(images):
+        s = embed_images(vision, images) @ texts.T
+        scaled = np.exp(100.0 * (s - s.max(axis=-1, keepdims=True)))
+        return (scaled / scaled.sum(axis=-1, keepdims=True))[:, 0]
+
+    confidence = probability(crops)
+    if tight is not None:
+        # The margin is what makes a sixteenth of a bus recognisable. It is also
+        # what makes the square *above* the bus look like one — measured on a
+        # real grid, the whole column of empty tarmac beside a bicycle scored
+        # above the threshold, and reCAPTCHA counts a false tick exactly as it
+        # counts a miss.
+        #
+        # So each square is scored twice, with its surroundings and bare, and
+        # the two are combined. Their geometric mean asks for both without
+        # demanding either outright: tarmac that only borrows a bicycle scores
+        # near zero bare and is dropped, while the square holding nothing but
+        # the wheels stays in on the strength of its context. Taking the lower
+        # of the two instead was tried and is too strict — it throws away the
+        # tiles where the object is genuinely cut in half, which on a 4x4 grid
+        # is most of them.
+        confidence = np.sqrt(confidence * probability(tight))
 
     hits = []
     for index, (box, score) in enumerate(zip(boxes, confidence)):

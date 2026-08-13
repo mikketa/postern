@@ -63,8 +63,14 @@ more often" looks like — it is what a decision made before the pictures looked
 
 This is also why campaigns run back to back are not comparable. After an hour of solving
 from one address, the same build is served more rounds than it was at the start. Comparing
-two solvers means interleaving their runs, not running one campaign after the other — and
-the numbers below that compare anything were measured that way.
+two solvers means interleaving their runs, not running one campaign after the other.
+
+Which is worth stating plainly about the table above: the 3/5 and the 2/5 were measured in
+consecutive windows, not interleaved, so they do not establish that one solver beats the
+other. An interleaved A/B was started and abandoned — by then both arms were being cut off
+at three rounds, which measures the address rather than either solver. The per-solver
+comparisons that this file does make are the offline ones, on saved grids whose answers
+were checked by eye.
 
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
