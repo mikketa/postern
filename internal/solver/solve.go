@@ -113,6 +113,13 @@ type Request struct {
 	// internal/challenge for what the command receives and must print.
 	ImageSolver string
 
+	// SavePanels, when set, is a directory to keep every picture grid in, as
+	// the PNG the solver was given and a JSON of what postern read off the
+	// panel. A corpus of those is what lets a solver be calibrated offline,
+	// and labelled, what lets a head be fitted for a category no model has a
+	// class for.
+	SavePanels string
+
 	// Log, when set, records what the challenge did and what was answered.
 	// Picture challenges are otherwise unreadable from the outside: a solve
 	// either produces a token or it does not, and nothing says which prompt
@@ -246,7 +253,10 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					}
 
 					attempts++
-					done, err := challenge.Solve(tabCtx, panel, req.ImageSolver, log)
+					done, err := challenge.Solve(tabCtx, panel, challenge.Options{
+						Solver:     req.ImageSolver,
+						SavePanels: req.SavePanels,
+					}, log)
 					rounds += done
 					if errors.Is(err, context.DeadlineExceeded) {
 						// Running out of time mid-challenge is the same failure

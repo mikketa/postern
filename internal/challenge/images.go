@@ -44,6 +44,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image"
@@ -162,6 +163,20 @@ const (
 // errPass is that refusal, travelling back up to the round loop.
 var errPass = errors.New("challenge: solver passed")
 
+// Options is what to do with a picture challenge.
+type Options struct {
+	// Solver is the command to hand each grid to.
+	Solver string
+
+	// SavePanels, when set, is a directory to keep a copy of every grid in:
+	// the PNG that was sent to the solver and a JSON of what postern read off
+	// the panel beside it. This is how you build a corpus — to calibrate a
+	// solver offline without burning live challenges, or to label tiles and
+	// fit a head for a category no model has a class for. See
+	// examples/train-probe.py.
+	SavePanels string
+}
+
 // Solve captures the panel, asks the external solver what to click, clicks it,
 // and presses the button. It reports whether the solver was able to answer at
 // all, not whether the answer was right — only the widget knows that, and the
@@ -172,7 +187,8 @@ var errPass = errors.New("challenge: solver passed")
 // every correct tile with a fresh picture and is only finished when none of
 // what is on screen matches any more — pressing verify before then submits a
 // half-answer, which reCAPTCHA rejects as surely as a wrong one.
-func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger) (int, error) {
+func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (int, error) {
+	solverCmd := opts.Solver
 	if solverCmd == "" {
 		return 0, fmt.Errorf("challenge: no image solver configured")
 	}
@@ -225,7 +241,7 @@ func Solve(ctx context.Context, frame *Frame, solverCmd string, log *slog.Logger
 			"grid", frame.View.Columns(),
 			"notice", frame.View.Notice)
 
-		points, err := inspect(ctx, frame, solverCmd)
+		points, err := inspect(ctx, frame, opts)
 		if errors.Is(err, errPass) {
 			// Reloading asks for a different challenge, but reCAPTCHA is under
 			// no obligation to change the subject and often does not: it has
@@ -377,7 +393,7 @@ func ready(ctx context.Context, frame *Frame) error {
 // photograph shows that it was taken mid-fade. Two do — a fading grid changes
 // between them and a finished one does not — so this takes photographs until
 // two in a row agree.
-func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, error) {
+func inspect(ctx context.Context, frame *Frame, opts Options) ([]point, error) {
 	shot, err := capture(ctx, frame)
 	if err != nil {
 		return nil, err
@@ -405,13 +421,45 @@ func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, erro
 		}
 	}
 
+	if opts.SavePanels != "" {
+		if err := keep(opts.SavePanels, shot, frame.View); err != nil {
+			// Worth saying, not worth abandoning a challenge over.
+			return nil, fmt.Errorf("challenge: saving the panel: %w", err)
+		}
+	}
+
 	path, cleanup, err := writeTemp(shot)
 	if err != nil {
 		return nil, err
 	}
 	defer cleanup()
 
-	return ask(ctx, solverCmd, path, frame.View)
+	return ask(ctx, opts.Solver, path, frame.View)
+}
+
+// keep writes the grid and what postern read off it, for calibrating a solver
+// later against grids that cost nothing to replay.
+func keep(dir string, shot []byte, view View) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	// Named for when it was taken, so a directory sorts into the order the
+	// challenges were served.
+	stem := filepath.Join(dir, strconv.FormatInt(time.Now().UnixNano(), 10))
+	if err := os.WriteFile(stem+".png", shot, 0o644); err != nil {
+		return err
+	}
+
+	meta, err := json.Marshal(struct {
+		Prompt  string `json:"prompt"`
+		Columns string `json:"columns"`
+		Tiles   string `json:"tiles"`
+	}{view.Prompt, strconv.Itoa(view.Columns()), encodeTiles(view.Tiles)})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(stem+".json", meta, 0o644)
 }
 
 // reload asks the widget for a different challenge, for when the solver has

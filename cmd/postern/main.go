@@ -182,6 +182,8 @@ func runSolve(args []string) error {
 	cdata := fs.String("cdata", "", "Turnstile cData parameter, if the site sets one")
 	imageSolver := fs.String("image-solver", "",
 		"command answering picture grids: it receives a PNG path and prints one x,y per line")
+	savePanels := fs.String("save-panels", "",
+		"keep a copy of every picture grid in this directory, to calibrate a solver against later")
 	timeout := fs.Duration("timeout", 60*time.Second, "give up after this long")
 	verbose := fs.Bool("v", false, "report what the challenge did, on stderr")
 	if err := fs.Parse(args); err != nil {
@@ -210,6 +212,7 @@ func runSolve(args []string) error {
 		Action:      *action,
 		CData:       *cdata,
 		ImageSolver: *imageSolver,
+		SavePanels:  *savePanels,
 	}
 	if *verbose {
 		req.Log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))

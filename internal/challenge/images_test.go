@@ -3,6 +3,7 @@ package challenge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -344,6 +345,66 @@ func TestSettledSpotsAGridStillFadingIn(t *testing.T) {
 	}
 	if settled([]byte("not a png"), encode(t, finished), tiles) {
 		t.Error("an unreadable screenshot was called settled")
+	}
+}
+
+// TestKeepWritesAPanelAndItsGeometry covers the corpus format, which several
+// scripts outside the repository read: the JSON has to say what the panel asked
+// and where its tiles were, or a saved grid cannot be replayed.
+func TestKeepWritesAPanelAndItsGeometry(t *testing.T) {
+	dir := t.TempDir()
+	view := View{
+		Prompt: "Sélectionnez toutes les images montrant des bus",
+		Tiles: []Box{
+			{X: 5, Y: 125, W: 96, H: 96}, {X: 101, Y: 125, W: 96, H: 96},
+			{X: 197, Y: 125, W: 96, H: 96}, {X: 5, Y: 221, W: 96, H: 96},
+			{X: 101, Y: 221, W: 96, H: 96}, {X: 197, Y: 221, W: 96, H: 96},
+			{X: 5, Y: 317, W: 96, H: 96}, {X: 101, Y: 317, W: 96, H: 96},
+			{X: 197, Y: 317, W: 96, H: 96},
+		},
+	}
+
+	if err := keep(dir, []byte("a png, as far as this is concerned"), view); err != nil {
+		t.Fatalf("keep: %v", err)
+	}
+
+	written, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(written) != 2 {
+		t.Fatalf("wrote %d files, want a png and a json", len(written))
+	}
+
+	var meta struct {
+		Prompt  string `json:"prompt"`
+		Columns string `json:"columns"`
+		Tiles   string `json:"tiles"`
+	}
+	for _, entry := range written {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if err := json.Unmarshal(body, &meta); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+	}
+
+	if meta.Prompt != view.Prompt {
+		t.Errorf("prompt = %q, want %q", meta.Prompt, view.Prompt)
+	}
+	if meta.Columns != "3" {
+		t.Errorf("columns = %q, want 3", meta.Columns)
+	}
+	if want := "5,125,96,96;"; !strings.HasPrefix(meta.Tiles, want) {
+		t.Errorf("tiles = %q, want it to start %q", meta.Tiles, want)
+	}
+	if got := strings.Count(meta.Tiles, ";"); got != len(view.Tiles)-1 {
+		t.Errorf("tiles has %d separators, want %d", got, len(view.Tiles)-1)
 	}
 }
 

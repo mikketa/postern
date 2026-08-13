@@ -207,6 +207,29 @@ DETECT_GRID_SIZE = 320
 # to 0.11 and the squares the bus was in to 0.42 and 0.69.
 DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.15)
 
+# A trained head, for the categories nothing off the shelf can answer.
+#
+# Crosswalks are the case that forced this. COCO has no class for one, ADE20K
+# has no class for one, an open-vocabulary detector asked for "a zebra crossing"
+# scores lane markings higher than crossings, and CLIP asked whether a tile is a
+# crosswalk answers a question about the street rather than about the paint —
+# measured over grids checked by eye, it ticked nine squares in excess over
+# three grids while missing none, because on a road every tile looks a bit like
+# the answer.
+#
+# What works is the oldest trick in the transfer-learning book: keep CLIP's
+# picture embedding, throw away its text side, and fit a logistic regression on
+# top of it from labelled tiles. It is 512 numbers and a bias, it trains in
+# seconds on a CPU, and examples/train-probe.py builds one from saved panels.
+# Measured over seven labelled grids, trained on one series and tested on
+# another so no tile appears in both: five ticks short and one in excess,
+# against roughly four in excess per grid for zero-shot CLIP.
+#
+# The weights only mean anything against the encoder they were fitted on, so
+# each file names its model and is ignored under any other.
+PROBE_SHARE = float(os.environ.get("POSTERN_PROBE_SHARE") or 0.70)
+PROBE_FLOOR = float(os.environ.get("POSTERN_PROBE_FLOOR") or 0.30)
+
 # ADE20K classes, for the segmentation model. A 4x4 grid is one photograph, and
 # the question "which squares hold the bus" is a question about pixels — so it
 # is answered with a model that labels pixels, and the squares follow from the
@@ -388,6 +411,10 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     # excess over three grids, and where the mask below was one short and one
     # over.
     found = detected(panel, boxes, wanted)
+    if found is None:
+        # Then a head trained for this category, which is how the categories no
+        # detector has a class for get answered.
+        found = probed(panel, boxes, wanted)
     if found is not None:
         return [(x + w / 2, y + h / 2) for x, y, w, h in (boxes[i] for i in sorted(found))]
 
@@ -542,6 +569,44 @@ def main() -> int:
         print(f"{x:.0f},{y:.0f}")
     return 0
 
+
+
+def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
+    """Which tiles hold the thing, according to a head trained for it.
+
+    Returns None when there is no head for this category, or when the head was
+    fitted on a different encoder from the one installed.
+    """
+    for name in wanted:
+        path = os.path.join(directory(), f"probe-{name.replace(' ', '-')}.json")
+        if not os.path.exists(path):
+            continue
+
+        with open(path) as handle:
+            head = json.load(handle)
+        if head.get("model") and head["model"] != os.environ.get("POSTERN_CLIP_MODEL", "patch16"):
+            print(f"ignoring {os.path.basename(path)}: fitted on {head['model']}", file=sys.stderr)
+            continue
+
+        weights = np.asarray(head["weights"], dtype=np.float32)
+        embeds = embed_images(session("clip-vision.onnx"),
+                              [crop(panel, box, 0.0) for box in boxes])
+        scores = 1.0 / (1.0 + np.exp(-(embeds @ weights + head["bias"])))
+
+        # Relative to the best tile as well as absolute. A grid holding none of
+        # the thing must tick nothing, so there is a floor; but how confident
+        # the head is varies with the photograph, so the bar for the rest of the
+        # grid is set by its own best tile.
+        bar = max(PROBE_FLOOR, PROBE_SHARE * float(scores.max()))
+        chosen = {i for i, score in enumerate(scores) if score >= bar}
+        for index in sorted(chosen):
+            print(f"tile {index}: {scores[index]:.2f} (head for {name}, bar {bar:.2f})",
+                  file=sys.stderr)
+        if not chosen:
+            print(f"best was {scores.max():.2f}, below {bar:.2f}", file=sys.stderr)
+        return chosen
+
+    return None
 
 
 def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
