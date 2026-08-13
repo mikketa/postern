@@ -139,7 +139,14 @@ func (d *Display) Env() []string {
 	if d == nil || d.Name == "" {
 		return nil
 	}
-	return []string{"DISPLAY=" + d.Name}
+	// WAYLAND_DISPLAY is emptied, not left alone. Chrome picks its backend
+	// before it looks at DISPLAY: on a Wayland session — which on this machine
+	// is every session — it finds WAYLAND_DISPLAY inherited from the caller,
+	// connects to the compositor and opens a real window on the user's desktop,
+	// with the Xvfb we just started sitting unused. The whole point of the
+	// virtual display is that nothing appears on screen and nothing takes the
+	// pointer, so the variable has to go for the choice to be ours.
+	return []string{"DISPLAY=" + d.Name, "WAYLAND_DISPLAY="}
 }
 
 // Close stops Xvfb, if we started one.

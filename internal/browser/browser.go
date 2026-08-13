@@ -182,6 +182,18 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 	}
 	if len(opts.Env) > 0 {
 		flags = append(flags, chromedp.Env(opts.Env...))
+
+		// Being handed an X display means being asked to use it. Emptying
+		// WAYLAND_DISPLAY is most of that, but Chrome's backend choice also
+		// answers to a hint that can be set by policy or by a wrapper script,
+		// and a windowed browser that lands on the operator's own desktop is
+		// not a cosmetic failure: it takes their pointer and their focus.
+		for _, entry := range opts.Env {
+			if strings.HasPrefix(entry, "DISPLAY=") && len(entry) > len("DISPLAY=") {
+				flags = append(flags, chromedp.Flag("ozone-platform", "x11"))
+				break
+			}
+		}
 	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, flags...)
