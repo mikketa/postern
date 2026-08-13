@@ -201,6 +201,9 @@ DETECT_CONFIDENCE = float(os.environ.get("POSTERN_DETECT_CONFIDENCE") or 0.35)
 DETECT_TILE_SIZE = 224
 DETECT_GRID_SIZE = 320
 
+# What the published build was traced at, and the only size it accepts.
+DETECT_FIXED_SIZE = 640
+
 # How much of a square a box has to cover for the square to count. A sixteenth
 # of a bus is still a bus, but a box that merely clips the corner of a square is
 # not: measured, the square above a bus that only its wing mirror reached came
@@ -630,17 +633,26 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
         return None
 
     model = session(DETECT_MODEL)
-    fixed = next((d for d in model.get_inputs()[0].shape[2:] if isinstance(d, int)), None)
 
-    def run(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
-        # An export with a fixed input size will not take anything else.
-        size = fixed or size
+    def feed(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
         batch = np.stack([
             np.asarray(image.resize((size, size), Image.Resampling.LANCZOS), dtype=np.float32)
             / 255.0
             for image in images
         ]).transpose(0, 3, 1, 2)
-        logits, boxes = model.run(None, {"pixel_values": batch})
+        return model.run(None, {"pixel_values": batch})
+
+    def run(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
+        try:
+            logits, boxes = feed(images, size)
+        except Exception:
+            # The published build declares a dynamic input and then refuses
+            # anything but the size it was traced at, deep inside the graph —
+            # so the only way to know is to try. Export it yourself for the
+            # sizes this would rather use; see install-vision.sh.
+            print(f"detector will not take {size}px, falling back to {DETECT_FIXED_SIZE}",
+                  file=sys.stderr)
+            logits, boxes = feed(images, DETECT_FIXED_SIZE)
 
         # Detectors score each class on its own — a picture can hold a bus and
         # a bicycle — so the scores are logistic, not a softmax over classes.

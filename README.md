@@ -183,6 +183,7 @@ So `solver-vision.py` asks whichever will actually answer, in that order:
 | | Answers | Measured on grids checked by eye |
 | --- | --- | --- |
 | **RT-DETR on COCO** | buses, cars, bicycles, motorcycles, fire hydrants, parking meters, traffic lights — **73%** of what was served | exact on six grids of six |
+| ↳ *as published, fixed at 640px* | the same | 3 short, 2 in excess over the same eight grids |
 | **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 5 short, 1 in excess over 7 grids |
 | **SegFormer on ADE20K** | bridges, mountains, stairs, palm trees, on a 4x4 | 1 short, 1 in excess |
 | **CLIP** | anything at all, badly | roughly 4 ticks in excess per grid |
