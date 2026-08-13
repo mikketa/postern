@@ -5,3 +5,6 @@
 
 # local Chrome profile, if someone points -profile at the repo
 /profile/
+
+# python bytecode from the example solvers
+__pycache__/
