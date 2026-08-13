@@ -199,7 +199,7 @@ So `solver-vision.py` asks whichever will actually answer, in that order:
 | --- | --- | --- |
 | **RT-DETR on COCO** | buses, cars, bicycles, motorcycles, fire hydrants, parking meters, traffic lights — **73%** of what was served | exact on six grids of six |
 | ↳ *as published, fixed at 640px* | the same | 3 short, 2 in excess over the same eight grids |
-| **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 1 in excess over a six-round challenge it had never seen |
+| **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 1 crossing missed, none in excess, over a challenge it had never seen |
 | **SegFormer on ADE20K** | bridges, mountains, stairs, palm trees, on a 4x4 | 1 short, 1 in excess |
 | **CLIP** | anything at all, badly | roughly 4 ticks in excess per grid |
 
