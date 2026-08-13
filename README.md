@@ -167,13 +167,25 @@ Three examples ship with it:
 | --- | --- |
 | `examples/solver-template.py` | the twenty lines, to build your own on |
 | `examples/solver-yolos.py` | YOLOS-tiny, a detector: knows the eighty things COCO has words for, passes on the rest |
-| `examples/solver-vision.py` | CLIP for a 3x3 grid, segmentation for a 4x4: the category comes from the prompt at runtime, so there is no list to fall off |
+| `examples/solver-vision.py` | a detector first, then a trained head, then segmentation, then CLIP — whichever can answer what was asked |
 
-The difference matters more than model size. A detector answers "is there a bus here"
-because a bus was in its training labels; ask it about a crosswalk, a staircase, a chimney
-or a bridge — all of which reCAPTCHA asks about — and it has no word for the question.
-CLIP scores a picture against a sentence, and postern already read the sentence out of the
-challenge document, so the category is whatever was asked for this round.
+Neither a detector nor CLIP is enough on its own, and the reason is the same both ways.
+A detector answers "is there a bus here" because a bus was in its training labels; ask it
+about a crosswalk, a staircase or a chimney — all of which reCAPTCHA asks about — and it
+has no word for the question. CLIP has no list, so the category can come from the prompt
+at runtime, but it scores how much a picture *looks like a sentence*, which on a grid of
+street photographs is a question about the street. Measured on labelled grids of
+crosswalks: a tile with no crossing in it scored 0.69 and a tile with one scored 0.48. No
+threshold separates those.
+
+So `solver-vision.py` asks whichever will actually answer, in that order:
+
+| | Answers | Measured on grids checked by eye |
+| --- | --- | --- |
+| **RT-DETR on COCO** | buses, cars, bicycles, motorcycles, fire hydrants, parking meters, traffic lights — **73%** of what was served | exact on six grids of six |
+| **A trained head** | a category with no class anywhere, currently crosswalks — another **14%** | 5 short, 1 in excess over 7 grids |
+| **SegFormer on ADE20K** | bridges, mountains, stairs, palm trees, on a 4x4 | 1 short, 1 in excess |
+| **CLIP** | anything at all, badly | roughly 4 ticks in excess per grid |
 
 ```sh
 examples/install-vision.sh ~/.cache/postern-vision   # venv, models, wrapper
@@ -227,10 +239,36 @@ the picture is *of*, and half a bus does not, so it stops early and ticks 1.8 sq
 `POSTERN_CLIP_LAYOUT=occlusion` still selects it.
 
 The segmentation model is optional. Without `segment.onnx` beside the CLIP files the 4x4
-path is not taken, and categories ADE20K does not have — crosswalk, fire hydrant, parking
-meter — fall back to scoring squares, since a mask of nothing is not an answer. B0 is
-what `install-vision.sh` fetches, at 15MB; B4 is better (one tick in excess against five)
-but ships as PyTorch weights, and the conversion is written out in that script.
+path is not taken, and categories ADE20K does not have fall back to scoring squares, since
+a mask of nothing is not an answer. B0 is what `install-vision.sh` fetches, at 15MB; B4 is
+better (one tick in excess against five) but ships as PyTorch weights, and the conversion
+is written out in that script.
+
+**When nothing off the shelf knows the word.** Crosswalks were 14% of the challenges
+served and no model answers them: COCO has no crosswalk, ADE20K has no crosswalk, an
+open-vocabulary detector asked for "a zebra crossing" scores lane markings higher than
+crossings, and CLIP ticks half the grid.
+
+What works is not a bigger model but a hundred labelled tiles. Keep CLIP's picture
+embedding, throw away its text side, and fit a logistic regression on top — the standard
+linear probe, 512 numbers and a bias, seconds to train on a CPU:
+
+```sh
+postern solve ... -save-panels ~/panels     # keep every grid postern is served
+# label them by eye: {"<panel name>": [0, 1, 7], ...}
+python examples/train-probe.py ~/panels labels.json crosswalk \
+    --models ~/.cache/postern-vision --hold <a panel series to test on>
+```
+
+Fitted on 63 tiles from 7 grids and validated across independent series, so that no tile
+appeared in both: **5 ticks short and 1 in excess**, against roughly 4 in excess per grid
+for zero-shot CLIP. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
+installs it. The weights only mean anything against the encoder they were fitted on, so
+each head names its model and is ignored under any other.
+
+That is the honest state of it: a category with a head is answered well, a category
+without one is answered by CLIP and often wrong. The path from the second to the first is
+a directory of saved panels and an evening of labelling.
 
 **What was hard about this.** Most of these failures were silent — the challenge looked
 answered and simply was not — and all of them are worth knowing about if you are building
@@ -372,6 +410,7 @@ Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status.
 | `-chrome` | autodetect | Path to the Chrome binary |
 | `-proxy` | none | Passed through to `--proxy-server` |
 | `-image-solver` | none | Command that answers picture grids; see [picture challenges](#picture-challenges) |
+| `-save-panels` | none | Directory to keep every grid in, to calibrate a solver against later |
 | `-timeout` | `60s` | Give up on a challenge after this long |
 | `-concurrency` | `2` | *(serve)* solves running at the same time |
 | `-addr` | `127.0.0.1:8099` | *(serve)* listen address |

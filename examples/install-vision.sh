@@ -132,11 +132,23 @@ json.dump(labels, open('detect-labels.json', 'w'))"
 	rm -f detect-config.json
 fi
 
+# Heads fitted for the categories nothing off the shelf answers. Only the ones
+# fitted on this encoder are copied; the solver checks anyway, but a directory
+# holding heads that will never be used is a puzzle for whoever looks in it.
+for head in "$(dirname "$SCRIPT")"/probe-*.json; do
+	[ -e "$head" ] || continue
+	if grep -q "\"model\": *\"$MODEL\"" "$head"; then
+		cp "$head" .
+		echo "installed $(basename "$head")"
+	fi
+done
+
 cat > solve <<EOF
 #!/bin/sh
 export POSTERN_CLIP_DIR="$DIR"
 export POSTERN_CLIP_CONFIDENCE="$CONFIDENCE"
 export POSTERN_CLIP_LAYOUT="$LAYOUT"
+export POSTERN_CLIP_MODEL="$MODEL"
 exec "$DIR/venv/bin/python" "$SCRIPT" "\$@"
 EOF
 chmod +x solve
