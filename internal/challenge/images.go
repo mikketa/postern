@@ -91,11 +91,22 @@ const (
 	// photographing only once that has finished.
 	replaceWait = 900 * time.Millisecond
 
-	// replaceAttempts is how many of those to wait before concluding that
-	// nothing is going to be replaced and the grid was a static one. Too few
-	// and a slow swap reads as a static grid, which submits an answer the
-	// challenge was not finished asking for.
-	replaceAttempts = 5
+	// replaceBudget is how long to wait before concluding that nothing is going
+	// to be replaced and the grid was a static one. Too short and a slow swap
+	// reads as a static grid, which submits an answer the challenge was not
+	// finished asking for.
+	replaceBudget = 5 * replaceWait
+
+	// pollWait is how often to look while waiting any of those out.
+	//
+	// It used to be replaceWait itself, which made the same number both the
+	// step and the budget: the panel was looked at every 900ms, so anything
+	// that had already happened went unnoticed for up to that long, several
+	// times a round. Measured over three challenges, waiting on the panel was
+	// 42-47% of the whole solve across 37-39 turns. Looking three times as
+	// often costs three cheap reads and changes nothing about how long postern
+	// is willing to wait — only about how quickly it notices it need not.
+	pollWait = 300 * time.Millisecond
 
 	// loadWait is how long to wait between checks that the pictures have
 	// arrived, and loadAttempts how many of those to make.
@@ -122,16 +133,16 @@ const (
 	buttonWaitMax  = 500
 	buttonAttempts = 6
 
-	// pointerAttempts is how long to wait for a pointer submission to register
+	// pointerBudget is how long to wait for a pointer submission to register
 	// before falling back to the keyboard.
-	pointerAttempts = 3
+	pointerBudget = 3 * replaceWait
 
-	// verdictAttempts is how long the panel is given to answer a submission.
+	// verdictBudget is how long the panel is given to answer a submission.
 	// reCAPTCHA takes a moment to decide, and the difference between "still
 	// thinking" and "here is another grid" is only visible afterwards. Reading
 	// too early sees the answered grid still standing and treats it as a fresh
 	// challenge, which burns an attempt on a question already answered.
-	verdictAttempts = 9
+	verdictBudget = 9 * replaceWait
 
 	// passExitCode is how a solver says it cannot answer this challenge.
 	passExitCode = 2
@@ -352,7 +363,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		// wrong one — so go round again and look at what replaced them.
 		if clicked > 0 {
 			stop := times.track("waiting for replacements")
-			replaced, err := await(ctx, frame, before, replaceAttempts, times)
+			replaced, err := await(ctx, frame, before, replaceBudget, times)
 			stop()
 			if err != nil {
 				return rounds, err
@@ -371,7 +382,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		}
 
 		stop = times.track("waiting for the verdict")
-		_, err = await(ctx, frame, before, verdictAttempts, times)
+		_, err = await(ctx, frame, before, verdictBudget, times)
 		stop()
 		if err != nil {
 			return rounds, err
@@ -435,7 +446,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	// means changing the layout and the panel does not always come back exactly
 	// where it was.
 	stop := times.track("waking the page")
-	err := stir(ctx, frame, times)
+	err := stir(ctx, frame, true, times)
 	stop()
 	if err != nil {
 		return nil, err
@@ -460,7 +471,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		// And again before looking again, or the page will sit exactly as it is
 		// and the second photograph will never be answered.
 		stop := times.track("waking the page")
-		err := stir(ctx, frame, times)
+		err := stir(ctx, frame, false, times)
 		if err == nil {
 			err = input.Pause(ctx, loadWaitMin, loadWaitMax)
 		}
@@ -571,7 +582,7 @@ func reload(ctx context.Context, frame *Frame, before []string, times *timings) 
 
 	// Wait for a genuinely different grid rather than photographing the old one
 	// again, which would pass right back to the solver and stall the round.
-	return await(ctx, frame, before, replaceAttempts, times)
+	return await(ctx, frame, before, replaceBudget, times)
 }
 
 // await waits for the panel to become something other than what it was: a
@@ -579,10 +590,11 @@ func reload(ctx context.Context, frame *Frame, before []string, times *timings) 
 // budget rather than stopping at the first quiet moment: reCAPTCHA takes a
 // beat to decide, and a grid read too early looks exactly like a grid that is
 // never going to change.
-func await(ctx context.Context, frame *Frame, before []string, tries int, times *timings) (bool, error) {
-	for range tries {
+func await(ctx context.Context, frame *Frame, before []string, budget time.Duration, times *timings) (bool, error) {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
 		stop := times.detail("one look at the panel")
-		err := input.Pause(ctx, int(replaceWait.Milliseconds()), int(replaceWait.Milliseconds()))
+		err := input.Pause(ctx, int(pollWait.Milliseconds()), int(pollWait.Milliseconds()))
 		stop()
 		if err != nil {
 			return false, err
@@ -671,7 +683,7 @@ func verify(ctx context.Context, frame *Frame, times *timings, log *slog.Logger)
 		// pointer arrives — the panel relabels and relays itself mid-round, and
 		// a click into that gap is swallowed silently. If nothing moved, fall
 		// through to the keyboard rather than leaving the answer unsubmitted.
-		taken, err := await(ctx, frame, before, pointerAttempts, times)
+		taken, err := await(ctx, frame, before, pointerBudget, times)
 		if err != nil || taken || !frame.Open() {
 			return err
 		}
@@ -748,18 +760,27 @@ func click(ctx context.Context, frame *Frame, x, y float64) error {
 // first grid of every run came back washed out, mixed with the page behind it,
 // while every later grid — after the pointer had moved to click something — was
 // clean. Moving the pointer is what a person does before choosing anyway.
-func stir(ctx context.Context, frame *Frame, times *timings) error {
-	fromX, fromY := frame.Point(frame.View.Width+70, frame.View.Height+50)
-	toX, toY := frame.Point(frame.View.Width/2, frame.View.Height/2)
+func stir(ctx context.Context, frame *Frame, move bool, times *timings) error {
+	// Only on the way in. Measured over three challenges, the pointer travel
+	// cost 456-559ms a time and ran twenty times a challenge — a tenth of the
+	// whole solve — while the resize below, which is the only part that
+	// actually repaints anything, cost one millisecond. The travel is here to
+	// look like a person considering the grid, and a person considers it once,
+	// not six times while nothing on screen changes. Every tile click still
+	// crosses the panel on its own curve, so the run is no stiller for it.
+	if move {
+		fromX, fromY := frame.Point(frame.View.Width+70, frame.View.Height+50)
+		toX, toY := frame.Point(frame.View.Width/2, frame.View.Height/2)
 
-	stop := times.detail("moving the pointer")
-	err := chromedp.Run(ctx, input.Move(
-		input.Point{X: fromX, Y: fromY},
-		input.Point{X: toX, Y: toY},
-	))
-	stop()
-	if err != nil {
-		return err
+		stop := times.detail("moving the pointer")
+		err := chromedp.Run(ctx, input.Move(
+			input.Point{X: fromX, Y: fromY},
+			input.Point{X: toX, Y: toY},
+		))
+		stop()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Pointer events change nothing on screen — no cursor is composited under
@@ -779,8 +800,8 @@ func stir(ctx context.Context, frame *Frame, times *timings) error {
 		return err
 	}
 
-	stop = times.detail("resizing to force a paint")
-	err = chromedp.Run(ctx,
+	stop := times.detail("resizing to force a paint")
+	err := chromedp.Run(ctx,
 		emulation.SetDeviceMetricsOverride(size.W, size.H+1, 1, false),
 		emulation.ClearDeviceMetricsOverride(),
 	)
