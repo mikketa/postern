@@ -276,21 +276,30 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
     --models ~/.cache/postern-vision --hold <a panel series to test on>
 ```
 
-Fitted on 84 tiles from 15 grids and validated on a whole challenge from a later run, so
-that no tile appeared in both: **nothing missed and 1 tick in excess** over its six rounds,
-against roughly 4 in excess per grid for zero-shot CLIP. Three things got it there, each
-measured against the same held-out challenge. Each head carries **the bar it should be read
+Fitted on 21 tiles from 6 grids and measured on a three-round challenge from a later run
+that shared no tile with it: **one crossing missed, nothing ticked in excess** — the miss
+was a crossing half hidden behind a market stall — against roughly 4 in excess per grid for
+zero-shot CLIP, which on that same grid ticked six squares where four were wanted. Three
+things earn their keep here, each measured. Each head carries **the bar it should be read
 at**, found by fitting without one grid at a time and keeping whichever bar costs fewest
-mistakes — a number fixed in the solver cannot suit every head, and this one was wrong: the
-head missed nothing and ticked six squares in excess, which its own bar halved to three.
-Every tile is learned from twice, once mirrored — a crossing in a mirror is still a
-crossing, so the label carries over for nothing. And **repeated tiles are thrown away**: a
-round only replaces the squares you ticked, so a six-round challenge is six copies of the
-same negatives around one or two new pictures, which buries the positives and lets a round
-be scored on tiles it was fitted on. Dropping them took 3 in excess to 1, and it is worth
-labelling every round precisely because the repeats cost nothing. More labelled grids is
-what moves it further. `examples/probe-crosswalk.json` is that head, and `install-vision.sh`
-installs it. The weights only mean anything against the encoder they were fitted on, so
+mistakes — a number fixed in the solver cannot suit every head, and an earlier head that
+missed nothing and ticked six squares in excess had that halved by its own bar. Every tile
+is learned from twice, once mirrored — a crossing in a mirror is still a crossing, so the
+label carries over for nothing. And **repeated tiles are thrown away**: a round only
+replaces the squares you ticked, so a six-round challenge is six copies of the same
+negatives around one or two new pictures, which buries the positives and lets a round be
+scored on tiles it was fitted on. Measured on one challenge, dropping them took 3 ticks in
+excess to 1, and it is worth labelling every round precisely because the repeats then cost
+nothing.
+
+A head is also **tied to the exact encoder it was fitted on**, which it records as a hash
+of the file. Not the model name — that is not enough, and the gap is not theoretical: a
+head reading 0.83 on a tile read 0.16 on the same tile under another export of the same
+`patch16`, so it ticked nothing, passed on every crosswalk grid, and two live runs ended
+asking for a category the solver was built to answer. Nothing looked wrong; the scores were
+simply low. A head whose hash does not match the installed encoder is now ignored, loudly,
+with the command to refit it. `examples/probe-crosswalk.json` is that head, fitted against
+what `install-vision.sh` installs, and the script installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
 
 That is the honest state of it: a category with a head is answered well, a category
