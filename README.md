@@ -47,7 +47,18 @@ Success here is mostly not about the solver.
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
 other lever for reCAPTCHA v2 is **reputation** — a profile with history behind it, and an
-IP that is not a datacenter — which is not something a solver can manufacture.
+IP that is not a datacenter — which is not something a solver can manufacture. What it can
+do is go out from somewhere else, which is what `-proxy` is for, credentials included:
+
+```sh
+postern solve -proxy http://user:pass@host:port ...
+```
+
+Chrome cannot be given a proxy password on the command line — it drops it, gets `407` back
+and raises a sign-in dialog nobody is there to answer, which surfaces as
+`ERR_INVALID_AUTH_CREDENTIALS` and nothing else. Postern strips the credentials off the
+flag, which also keeps them out of a world-readable `/proc`, and answers the challenge over
+CDP instead.
 
 How much it dominates is visible in the runs. Counting the rounds each one took — a round
 being one grid read, answered and submitted, six of which is one full pass of the solve
@@ -436,7 +447,7 @@ Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status.
 | `-headless` | `false` | Headless mode. Measurably more detectable — see above |
 | `-screen` | `1920x1080` | Virtual screen size, `WxH`. The window is sized from it |
 | `-chrome` | autodetect | Path to the Chrome binary |
-| `-proxy` | none | Passed through to `--proxy-server` |
+| `-proxy` | none | Go out through this proxy; `user:pass@` is answered over CDP, not passed to Chrome |
 | `-image-solver` | none | Command that answers picture grids; see [picture challenges](#picture-challenges) |
 | `-save-panels` | none | Directory to keep every grid in, to calibrate a solver against later |
 | `-timeout` | `60s` | Give up on a challenge after this long |
