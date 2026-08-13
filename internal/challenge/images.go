@@ -204,11 +204,15 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		return 0, fmt.Errorf("challenge: no image solver configured")
 	}
 
+	times := newTimings()
 	passes := 0
 	stuck := 0
 	// rounds is how many grids this challenge took, which is the caller's
 	// only measure of how much reCAPTCHA is asking for.
 	rounds := 0
+	// Reported however the challenge ends, including the error paths: a solve
+	// that ran out of time is exactly the one worth knowing the shape of.
+	defer func() { times.report(log, rounds) }()
 
 	// fresh presses the reload button and insists on getting somewhere. A panel
 	// that keeps handing back the same grid is not going to be talked round,
@@ -241,7 +245,10 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			return rounds, nil
 		}
 
-		if err := ready(ctx, frame); err != nil {
+		stop := times.track("waiting for pictures")
+		err := ready(ctx, frame)
+		stop()
+		if err != nil {
 			return rounds, err
 		}
 
@@ -252,7 +259,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			"grid", frame.View.Columns(),
 			"notice", frame.View.Notice)
 
-		points, err := inspect(ctx, frame, opts, log)
+		points, err := inspect(ctx, frame, opts, times, log)
 		if errors.Is(err, errPass) {
 			// Reloading asks for a different challenge, but reCAPTCHA is under
 			// no obligation to change the subject and often does not: it has
@@ -302,13 +309,16 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 				continue
 			}
 
-			if err := click(ctx, frame, p.X, p.Y); err != nil {
+			stop := times.track("clicking")
+			err := click(ctx, frame, p.X, p.Y)
+			if err == nil {
+				err = input.Pause(ctx, betweenClicksMin, betweenClicksMax)
+			}
+			stop()
+			if err != nil {
 				return rounds, fmt.Errorf("challenge: click tile: %w", err)
 			}
 			clicked++
-			if err := input.Pause(ctx, betweenClicksMin, betweenClicksMax); err != nil {
-				return rounds, err
-			}
 		}
 		if clicked < len(points) {
 			log.Info("kept tiles the solver named again", "clicked", clicked, "named", len(points))
@@ -341,7 +351,9 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		// before then is a half-answer, which reCAPTCHA rejects as surely as a
 		// wrong one — so go round again and look at what replaced them.
 		if clicked > 0 {
+			stop := times.track("waiting for replacements")
 			replaced, err := await(ctx, frame, before, replaceAttempts)
+			stop()
 			if err != nil {
 				return rounds, err
 			}
@@ -351,10 +363,17 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		}
 
 		// Nothing left to click: submit, and wait to be told.
-		if err := Verify(ctx, frame, log); err != nil {
+		stop = times.track("submitting")
+		err = Verify(ctx, frame, log)
+		stop()
+		if err != nil {
 			return rounds, err
 		}
-		if _, err := await(ctx, frame, before, verdictAttempts); err != nil {
+
+		stop = times.track("waiting for the verdict")
+		_, err = await(ctx, frame, before, verdictAttempts)
+		stop()
+		if err != nil {
 			return rounds, err
 		}
 		if !frame.Open() {
@@ -404,7 +423,7 @@ func ready(ctx context.Context, frame *Frame) error {
 // photograph shows that it was taken mid-fade. Two do — a fading grid changes
 // between them and a finished one does not — so this takes photographs until
 // two in a row agree.
-func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) ([]point, error) {
+func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, log *slog.Logger) ([]point, error) {
 	// Get the page painted before the first photograph too. The panel fades in
 	// over the page, and under a virtual display that fade stops wherever it was
 	// when the last frame was composited — measured, the opening grid of every
@@ -415,7 +434,10 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 	// Everything is measured again afterwards, because provoking a repaint
 	// means changing the layout and the panel does not always come back exactly
 	// where it was.
-	if err := stir(ctx, frame); err != nil {
+	stop := times.track("waking the page")
+	err := stir(ctx, frame)
+	stop()
+	if err != nil {
 		return nil, err
 	}
 	if err := frame.Reread(ctx); err != nil {
@@ -426,7 +448,9 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 	}
 
 	started := time.Now()
+	stop = times.track("photographing")
 	shot, err := capture(ctx, frame)
+	stop()
 	if err != nil {
 		return nil, err
 	}
@@ -435,10 +459,13 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 	for attempt := range paintAttempts {
 		// And again before looking again, or the page will sit exactly as it is
 		// and the second photograph will never be answered.
-		if err := stir(ctx, frame); err != nil {
-			return nil, err
+		stop := times.track("waking the page")
+		err := stir(ctx, frame)
+		if err == nil {
+			err = input.Pause(ctx, loadWaitMin, loadWaitMax)
 		}
-		if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
+		stop()
+		if err != nil {
 			return nil, err
 		}
 		if err := frame.Reread(ctx); err != nil {
@@ -449,9 +476,11 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 		}
 
 		started := time.Now()
+		stop = times.track("photographing")
 		bounded, cancel := context.WithTimeout(ctx, repaintTimeout)
 		again, err := capture(bounded, frame)
 		cancel()
+		stop()
 
 		// A screenshot request is only answered once the page has a frame to
 		// give. A grid that has finished fading in has nothing left to paint,
@@ -490,6 +519,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) 
 	}
 	defer cleanup()
 
+	defer times.track("the solver")()
 	return ask(ctx, opts.Solver, path, frame.View)
 }
 
