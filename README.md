@@ -28,16 +28,19 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, dummy interactive key, after the widget moved | token, 3.9s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens, ~1m12s**, with the example solver — see below |
+| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-clip.py` |
+| Same, with `solver-yolos.py` | 2/5, measured in the following hour |
+| Same, after ~25 solves from one address | **0/5** — see reputation, below |
 
-The last row deserves the detail rather than a footnote. When Google decides you are
+The last three rows deserve the detail rather than a footnote. When Google decides you are
 worth challenging, it puts up a grid of photographs. Postern drives that grid — finds it,
 measures it, answers it in as many rounds as it takes, and submits — but the looking is
-delegated to a command you nominate. The 3/5 above is with `examples/solver-yolos.py`, a
-small COCO model; both failures were categories COCO has no word for, and postern said so
-rather than timing out. A better model is a better number, and swapping it is one flag.
-With no solver configured at all, it reports the challenge in about nine seconds rather
-than burning the timeout.
+delegated to a command you nominate. With no solver configured at all, it reports the
+challenge in about nine seconds rather than burning the timeout.
+
+Read those three rows together, because they are the honest shape of this: the same build
+went from 3/5 to 0/5 over an evening of testing from one home connection, without a line
+changing. Success here is mostly not about the solver.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
@@ -175,6 +178,28 @@ postern solve -kind recaptcha-v2 -url ... -sitekey ... \
 That script exists because "supply your own vision model" should be a line to copy, not an
 afternoon. It is still an example: a larger CLIP, a fine-tune on captcha tiles or a hosted
 model all plug into the same protocol, which is a PNG in and coordinates out.
+
+**Changing the model is the biggest lever there is, and it is one line.** reCAPTCHA
+degrades its photographs on purpose, and ViT-B/32 hits a wall on the worst of them: on a
+grid of cars, no tile scored above **0.20** — nothing to click, on a grid full of cars.
+Pointing the same script at ViT-B/16 instead, by fetching that model into the directory it
+reads:
+
+| | ViT-B/32 | ViT-B/16 |
+| --- | --- | --- |
+| That grid of cars | nothing above 0.20 | seven tiles over the threshold |
+| A bus, on the tile holding it | 0.54 | **0.94** |
+
+A sharper model is also more confident about everything, so the threshold does not carry
+over — set `POSTERN_CLIP_CONFIDENCE` when you change models. What does not change is
+postern: the grid is still read, clicked and submitted the same way.
+
+Things that were tried and did not work, so you can skip them: **median-filtering the
+noise out** before scoring lifts the best score on a bad grid from 0.20 to 0.25 and costs
+more than it gains — across the saved panels it took grids with something to click from 33
+down to 30, because it removes as much signal as noise. And **swapping the negatives** —
+suspecting "a photo of an empty road" of absorbing a grid of parked cars — moves the same
+number from 0.20 to 0.25. Neither is the problem. The model is.
 
 **What was hard about this.** Most of these failures were silent — the challenge looked
 answered and simply was not — and all of them are worth knowing about if you are building

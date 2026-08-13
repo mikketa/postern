@@ -6,14 +6,30 @@
 #     postern solve -kind recaptcha-v2 -url ... -sitekey ... \
 #         -image-solver ~/.cache/postern-clip/solve
 #
+# A second argument picks the model: patch32 (the default) or patch16, which
+# sees noticeably more of a deliberately degraded photograph and costs about
+# four times the CPU per grid. The threshold in solver-clip.py is calibrated for
+# patch32, so the wrapper sets POSTERN_CLIP_CONFIDENCE for the other one.
+#
 # Nothing here is required to use postern — it ships no vision model and works
 # without one, reporting picture challenges rather than answering them. This is
 # for when you want the example working in one command instead of five.
 set -eu
 
 DIR=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/postern-clip}
+MODEL=${2:-patch32}
 SCRIPT=$(cd "$(dirname "$0")" && pwd)/solver-clip.py
-BASE=https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/main
+
+# 0.34 for patch32 is where the false ticks and the misses balance out, over
+# saved grids with the answers checked by eye. 0.60 for patch16 is a starting
+# point rather than a measured optimum: that model scores everything higher, and
+# it has not been through the same calibration.
+case $MODEL in
+patch32) CONFIDENCE=0.34 ;;
+patch16) CONFIDENCE=0.60 ;;
+*) echo "unknown model $MODEL, want patch32 or patch16" >&2; exit 1 ;;
+esac
+BASE=https://huggingface.co/Xenova/clip-vit-base-$MODEL/resolve/main
 
 command -v python3 >/dev/null || { echo "python3 not found" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl not found" >&2; exit 1; }
@@ -46,6 +62,7 @@ fetch "$BASE/tokenizer.json" clip-tokenizer.json
 cat > solve <<EOF
 #!/bin/sh
 export POSTERN_CLIP_DIR="$DIR"
+export POSTERN_CLIP_CONFIDENCE="$CONFIDENCE"
 exec "$DIR/venv/bin/python" "$SCRIPT" "\$@"
 EOF
 chmod +x solve
