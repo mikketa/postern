@@ -293,9 +293,13 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// A failed attempt usually means the widget has not been laid out
 			// yet, so leave the counter alone and try again on the next tick.
 			if p.clickable && readyToClick(start, lastClick, clicks) {
-				if err := clickCheckbox(tabCtx, p.frameHost); err == nil {
+				if err := clickCheckbox(tabCtx, p.frameHost); err != nil {
+					log.Debug("cannot click the checkbox yet", "why", err)
+				} else {
 					clicks++
 					lastClick = time.Now()
+					log.Info("ticked the checkbox", "clicks", clicks,
+						"after", time.Since(start).Round(time.Millisecond))
 				}
 			}
 		}

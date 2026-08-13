@@ -25,7 +25,8 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, production sitekey, managed mode | **5/5 tokens, ~3s each** |
 | Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens, 13.7s total**, median 4s |
 | **reCAPTCHA v3** | token, ~4s |
-| **Turnstile**, dummy interactive key, after the widget moved | token, 3.9s |
+| **Turnstile**, dummy always-passes keys, visible and invisible | token, both |
+| **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token** — the box is ticked three times and nothing comes back |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-vision.py` |
@@ -448,6 +449,12 @@ with no risk analysis behind it — no fingerprint scoring, no behavioural check
 they render no iframe, only the container and the hidden field. They prove the plumbing
 works. They say nothing about a production sitekey, which is why the table at the top of
 this file was measured against one.
+
+`3x00000000000000000000FF` is the exception and it does not pass. Postern finds the widget
+and ticks the box — three times, seconds apart, which the log now says out loud — and no
+token comes back. That key exists to force the interactive challenge on screen; nothing
+here gets through it, and the production Turnstile sitekey in the table above is answered
+without ever reaching that state.
 
 Validate a dummy token with the matching dummy secret:
 
