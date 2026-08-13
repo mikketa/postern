@@ -51,8 +51,10 @@ Two things matter more than the amount of data:
     pictures are kept.
 
 The head lands next to the models as probe-<category>.json and is picked up
-automatically. It is tied to the encoder it was fitted on: a head fitted on
-patch16 is ignored under patch32, which is why the file names its model.
+automatically. It is tied to the exact encoder it was fitted on, which the file
+records as a hash: another export of the same model name multiplies out to
+numbers that mean nothing, so the solver ignores a head it cannot match and says
+so rather than answering badly.
 """
 
 import argparse
@@ -139,10 +141,10 @@ def read(panels, labels, vision, augment=True, seen=None):
         crops, marks = [], []
         for i, (x, y, w, h) in enumerate(boxes):
             crop = panel.crop((x, y, x + w, y + h))
-            fingerprint = hashlib.sha1(crop.tobytes()).hexdigest()
-            if fingerprint in seen:
+            already = hashlib.sha1(crop.tobytes()).hexdigest()
+            if already in seen:
                 continue
-            seen.add(fingerprint)
+            seen.add(already)
             crops.append(crop)
             marks.append(1.0 if i in tiles else 0.0)
         if not crops:
