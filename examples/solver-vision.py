@@ -40,6 +40,7 @@ tiles, or a hosted vision model all plug in the same way — the protocol is a P
 in and coordinates out.
 """
 
+import json
 import os
 import re
 import sys
@@ -147,6 +148,64 @@ BACKGROUNDS = [
     "a photo of a pavement",
     "a blurred photo of nothing in particular",
 ]
+
+# COCO classes, for the object detector — the first thing asked, because it
+# answers the question the challenge actually poses. CLIP is asked how much a
+# picture looks like a sentence, which on a grid of street photographs is a
+# question about the street: measured over grids checked by eye, a tile with no
+# crosswalk in it scored 0.69 while a tile with one scored 0.48, and no
+# threshold separates those. A detector is asked whether the thing is in the
+# picture and where, and it either finds it or does not.
+#
+# Two spellings per class because detectors disagree on names: COCO says
+# "motorcycle" and the darknet lineage says "motorbike", and a model trained on
+# one and labelled with the other is common enough to be worth allowing for.
+DETECT_CLASSES = {
+    "bus": ("bus",),
+    "car": ("car", "truck"),
+    "taxi": ("car",),
+    "truck": ("truck",),
+    "bicycle": ("bicycle",),
+    "motorcycle": ("motorcycle", "motorbike"),
+    "traffic light": ("traffic light", "trafficlight"),
+    "fire hydrant": ("fire hydrant", "firehydrant"),
+    "parking meter": ("parking meter", "parkingmeter"),
+    "boat": ("boat",),
+    "train": ("train",),
+    "bench": ("bench",),
+    "clock": ("clock",),
+}
+
+# The detector, and the labels its class numbers mean. Absent either, the
+# detector path is simply not taken.
+DETECT_MODEL = "detect.onnx"
+DETECT_LABELS = "detect-labels.json"
+
+# How sure the detector has to be. Lower than it looks: a detector's confidence
+# is a different scale from a classifier's, and on tiles this small a real bus
+# at 0.4 is common while a hallucinated one above 0.35 is not. Measured over the
+# grids checked by eye, this is where the fire hydrant that is there (0.86)
+# clears and the one that is not (0.32) does not.
+DETECT_CONFIDENCE = float(os.environ.get("POSTERN_DETECT_CONFIDENCE") or 0.35)
+
+# What each layout is fed. A 3x3 tile is a whole photograph, so it goes in on
+# its own at the size the detector likes; a 4x4 grid is one photograph cut up,
+# so it goes in whole and the squares are read off the boxes.
+#
+# Bigger is not better for either. reCAPTCHA serves tiles about 96 pixels
+# square, so 224 is already a 2.3x enlargement and 640 is a 6.7x one — and
+# measured over the grids checked by eye, feeding it 640 cost five ticks it
+# should have made and took seven times as long. A model exported at a fixed
+# 640, which is how the published ONNX build comes, is used at 640 anyway;
+# there is nothing else to do with it.
+DETECT_TILE_SIZE = 224
+DETECT_GRID_SIZE = 320
+
+# How much of a square a box has to cover for the square to count. A sixteenth
+# of a bus is still a bus, but a box that merely clips the corner of a square is
+# not: measured, the square above a bus that only its wing mirror reached came
+# to 0.11 and the squares the bus was in to 0.42 and 0.69.
+DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.15)
 
 # ADE20K classes, for the segmentation model. A 4x4 grid is one photograph, and
 # the question "which squares hold the bus" is a question about pixels — so it
@@ -321,12 +380,24 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     panel = Image.open(image_path).convert("RGB")
     boxes = tiles()
 
+    # Ask the detector first. It answers most of what reCAPTCHA asks — buses,
+    # cars, bicycles, motorcycles, fire hydrants, parking meters and traffic
+    # lights were 73% of the challenges served over a night of measuring — and
+    # it answers it far better than the other two: on grids checked by eye it
+    # was exactly right where scoring tiles with CLIP ticked nine squares in
+    # excess over three grids, and where the mask below was one short and one
+    # over.
+    found = detected(panel, boxes, wanted)
+    if found is not None:
+        return [(x + w / 2, y + h / 2) for x, y, w, h in (boxes[i] for i in sorted(found))]
+
     # A 4x4 grid is one photograph, and which squares to tick is a question
     # about where the thing is rather than what each square looks like. That is
     # what a segmentation model answers, so it gets asked when there is one to
-    # ask and the category is one it knows. Measured over saved grids: this
-    # ticks 3.5 squares out of sixteen on average, against 8.7 for scoring each
-    # square — half the grid — and 1.8 for covering squares up.
+    # ask and the category is one it knows — bridges, mountains, stairs and palm
+    # trees, which are the ones COCO has no word for. Measured over saved grids:
+    # this ticks 3.5 squares out of sixteen on average, against 8.7 for scoring
+    # each square — half the grid — and 1.8 for covering squares up.
     if len(boxes) == 16 and os.path.exists(os.path.join(directory(), SEGMENT_MODEL)):
         squares = segmented(panel, boxes, wanted)
         if squares is not None:
@@ -471,6 +542,91 @@ def main() -> int:
         print(f"{x:.0f},{y:.0f}")
     return 0
 
+
+
+def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
+    """Which tiles hold the thing, from a detector that knows what it is.
+
+    Returns None when this cannot be answered here — no detector installed, or
+    a category COCO has never heard of — so the caller falls back to the mask
+    or to CLIP.
+    """
+    classes = next((DETECT_CLASSES[name] for name in wanted if name in DETECT_CLASSES), None)
+    labels_path = os.path.join(directory(), DETECT_LABELS)
+    if classes is None or not os.path.exists(os.path.join(directory(), DETECT_MODEL)):
+        return None
+    if not os.path.exists(labels_path):
+        return None
+
+    with open(labels_path) as handle:
+        labels = {int(k): v.lower() for k, v in json.load(handle).items()}
+    wanted_ids = {i for i, name in labels.items() if name in classes}
+    if not wanted_ids:
+        return None
+
+    model = session(DETECT_MODEL)
+    fixed = next((d for d in model.get_inputs()[0].shape[2:] if isinstance(d, int)), None)
+
+    def run(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
+        # An export with a fixed input size will not take anything else.
+        size = fixed or size
+        batch = np.stack([
+            np.asarray(image.resize((size, size), Image.Resampling.LANCZOS), dtype=np.float32)
+            / 255.0
+            for image in images
+        ]).transpose(0, 3, 1, 2)
+        logits, boxes = model.run(None, {"pixel_values": batch})
+
+        # Detectors score each class on its own — a picture can hold a bus and
+        # a bicycle — so the scores are logistic, not a softmax over classes.
+        return 1.0 / (1.0 + np.exp(-logits)), boxes
+
+    # Nine tiles are nine photographs: ask each one whether the thing is in it.
+    if len(boxes) != 16:
+        scores, _ = run([crop(panel, box, 0.0) for box in boxes], DETECT_TILE_SIZE)
+        chosen = set()
+        for index, tile in enumerate(scores):
+            best = 0.0
+            for query in tile:
+                if int(query.argmax()) in wanted_ids:
+                    best = max(best, float(query.max()))
+            if best >= DETECT_CONFIDENCE:
+                print(f"tile {index}: {best:.2f}", file=sys.stderr)
+                chosen.add(index)
+        return chosen
+
+    # Sixteen are one photograph: find the thing in it, then read off which
+    # squares its box covers.
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[0] + b[2] for b in boxes)
+    y1 = max(b[1] + b[3] for b in boxes)
+
+    scores, coords = run([panel.crop((int(x0), int(y0), int(x1), int(y1)))], DETECT_GRID_SIZE)
+
+    covered: dict[int, float] = {}
+    for query, box in zip(scores[0], coords[0]):
+        if int(query.argmax()) not in wanted_ids or float(query.max()) < DETECT_CONFIDENCE:
+            continue
+
+        # Boxes come back as centre, width and height, as a fraction of the
+        # picture; the squares are in the panel's pixels.
+        cx, cy, w, h = box
+        left, right = (cx - w / 2) * (x1 - x0) + x0, (cx + w / 2) * (x1 - x0) + x0
+        top, bottom = (cy - h / 2) * (y1 - y0) + y0, (cy + h / 2) * (y1 - y0) + y0
+        print(f"found one at {left:.0f},{top:.0f} {right-left:.0f}x{bottom-top:.0f} "
+              f"({float(query.max()):.2f})", file=sys.stderr)
+
+        for index, (sx, sy, sw, sh) in enumerate(boxes):
+            overlap_x = max(0.0, min(sx + sw, right) - max(sx, left))
+            overlap_y = max(0.0, min(sy + sh, bottom) - max(sy, top))
+            share = overlap_x * overlap_y / (sw * sh)
+            covered[index] = max(covered.get(index, 0.0), share)
+
+    chosen = {i for i, share in covered.items() if share >= DETECT_OVERLAP}
+    for index in sorted(chosen):
+        print(f"tile {index}: {covered[index]*100:.0f}% covered", file=sys.stderr)
+    return chosen
 
 
 def segmented(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
