@@ -606,12 +606,14 @@ func await(ctx context.Context, frame *Frame, before []string, budget time.Durat
 			return true, nil
 		}
 		if frame.View.Settling {
+			times.mark("a look spent on a tile mid-fade")
 			continue
 		}
 		if changed(before, frame.View.Pictures()) {
 			return true, nil
 		}
 	}
+	times.mark("waits given up on")
 	return false, nil
 }
 

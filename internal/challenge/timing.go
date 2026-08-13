@@ -72,6 +72,16 @@ func (t *timings) detail(phase string) func() {
 	}
 }
 
+// mark counts something that has no duration worth measuring — a branch taken,
+// a wait given up on. It shares the inner table so it prints alongside the
+// phase it explains.
+func (t *timings) mark(name string) {
+	if t == nil {
+		return
+	}
+	t.within[name]++
+}
+
 // report writes what each phase cost, longest first.
 //
 // The unattributed line is the point of the exercise as much as the phases are:
@@ -116,8 +126,8 @@ func (t *timings) report(log *slog.Logger, rounds int) {
 			"share", share(rest))
 	}
 
-	within := make([]string, 0, len(t.inner))
-	for phase := range t.inner {
+	within := make([]string, 0, len(t.within))
+	for phase := range t.within {
 		within = append(within, phase)
 	}
 	sort.Slice(within, func(i, j int) bool {
