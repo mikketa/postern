@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	cdpbrowser "github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
@@ -38,6 +39,11 @@ const headlessMarker = "HeadlessChrome/"
 // it the viewport would be exactly as tall as the screen — something that only
 // happens in fullscreen, and one of the cheapest headless tells going.
 const chromeUIHeight = 111
+
+// shutdownTimeout bounds the polite shutdown. Chrome normally goes in well
+// under a second; the point of the bound is that a browser refusing to close
+// must not hold up the caller, since the kill that follows will end it anyway.
+const shutdownTimeout = 5 * time.Second
 
 // Options configures the Chrome instance Postern drives.
 type Options struct {
@@ -375,6 +381,28 @@ func (b *Browser) sizeWindow() chromedp.ActionFunc {
 
 // Close terminates Chrome.
 func (b *Browser) Close() {
+	// Ask Chrome to shut down, and wait for it, rather than cancelling the
+	// context and killing it.
+	//
+	// Cookies and history survive a kill — those are SQLite and land on disk as
+	// they happen — but the profile's own state does not. Measured over two
+	// runs each way, a killed Chrome left no Default/Preferences at all, and a
+	// closed one wrote it every time, along with nine other files. Preferences
+	// is where the profile's settled state lives, so without it every run reads
+	// as a browser that has never once been closed: no language settled, no
+	// permissions remembered, none of the accumulated small state a profile
+	// picks up. For a program whose case is that the profile ages like a
+	// person's, that is the part that was not ageing.
+	if b.browserCtx != nil {
+		done, cancel := context.WithTimeout(context.WithoutCancel(b.browserCtx), shutdownTimeout)
+		if err := chromedp.Cancel(done); err != nil {
+			// Nothing useful to do about it — the cancels below still stop the
+			// process — but a profile that will not save is worth a line.
+			_ = err
+		}
+		cancel()
+	}
+
 	if b.browserCancel != nil {
 		b.browserCancel()
 	}
