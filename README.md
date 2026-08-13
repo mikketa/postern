@@ -38,9 +38,10 @@ measures it, answers it in as many rounds as it takes, and submits — but the l
 delegated to a command you nominate. With no solver configured at all, it reports the
 challenge in about nine seconds rather than burning the timeout.
 
-Read those three rows together, because they are the honest shape of this: the same build
-went from 3/5 to 0/5 over an evening of testing from one home connection, without a line
-changing. Success here is mostly not about the solver.
+Read those three rows together, because they are the honest shape of this. They fell from
+3/5 to 0/5 over an evening of testing from one home connection — and the builds in between
+differed only by fixes that should have helped, every one of them verified separately.
+Success here is mostly not about the solver.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
