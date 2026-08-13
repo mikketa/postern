@@ -67,10 +67,25 @@ STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
 # change models.
 CONFIDENCE = float(os.environ.get("POSTERN_CLIP_CONFIDENCE") or 0.34)
 
-# For the 4x4 layout, how much of the neighbouring squares to include. One
-# sixteenth of a bus is not a bus to anything that looks at pictures; with a
-# margin the square is recognisable, and the object still has to be in the
-# middle of it to score.
+# For the 4x4 layout, where squares are found by covering them up rather than
+# by looking at them one at a time. OCCLUSION_STOP is how much of the thing has
+# to still be visible for there to be another square worth finding, and
+# OCCLUSION_DROP how much of the picture a square has to take with it to count.
+#
+# Both are calibrated on ViT-B/16 against saved grids with the answers checked
+# by eye, and both depend on the model being able to tell: on ViT-B/32 the same
+# procedure finds almost nothing, because covering a square barely moves a score
+# it was never confident about. Use patch16 for this, or POSTERN_CLIP_LAYOUT=
+# tiles to score squares one at a time instead.
+OCCLUSION_STOP = float(os.environ.get("POSTERN_CLIP_STOP") or 0.45)
+OCCLUSION_DROP = float(os.environ.get("POSTERN_CLIP_DROP") or 0.10)
+
+# Mid-grey, which is what the preprocessing normalises closest to nothing.
+OCCLUSION_GREY = (128, 128, 128)
+
+# How much of the neighbouring squares the fallback includes when it has to
+# score a 4x4 one square at a time. One sixteenth of a bus is not a bus to
+# anything that looks at pictures.
 TILE_MARGIN = 0.55
 
 # What reCAPTCHA asks for, in the language it asks. CLIP thinks in English, so
@@ -261,25 +276,18 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     wanted = subject(prompt)
     print(f"prompt: {prompt!r} -> {wanted[0]!r}", file=sys.stderr)
 
-    panel = Image.open(image_path)
+    panel = Image.open(image_path).convert("RGB")
     boxes = tiles()
-
-    # A 3x3 grid is nine separate photographs; a 4x4 is one picture cut up, so
-    # each square is shown with its surroundings to be recognisable at all.
-    margin = TILE_MARGIN if len(boxes) == 16 else 0.0
-    crops = [crop(panel, box, margin) for box in boxes]
-    tight = [crop(panel, box, 0.0) for box in boxes] if margin else None
 
     # One vector for the question and one per thing it might be instead. The
     # question's vector is the average of its phrasings — several ways of asking
     # cancel out what is peculiar to any one of them, and averaging rather than
     # scoring each separately keeps this a choice between seven things, which is
-    # what CONFIDENCE is calibrated against.
+    # what the thresholds are calibrated against.
     texts = np.stack([
         normalise(embed_texts(phrasings(wanted)).mean(axis=0)),
         *embed_texts(BACKGROUNDS),
     ])
-
     vision = session("clip-vision.onnx")
 
     def probability(images):
@@ -287,34 +295,101 @@ def solve(image_path: str) -> list[tuple[float, float]]:
         scaled = np.exp(100.0 * (s - s.max(axis=-1, keepdims=True)))
         return (scaled / scaled.sum(axis=-1, keepdims=True))[:, 0]
 
-    confidence = probability(crops)
-    if tight is not None:
-        # The margin is what makes a sixteenth of a bus recognisable. It is also
-        # what makes the square *above* the bus look like one — measured on a
-        # real grid, the whole column of empty tarmac beside a bicycle scored
-        # above the threshold, and reCAPTCHA counts a false tick exactly as it
-        # counts a miss.
-        #
-        # So each square is scored twice, with its surroundings and bare, and
-        # the two are combined. Their geometric mean asks for both without
-        # demanding either outright: tarmac that only borrows a bicycle scores
-        # near zero bare and is dropped, while the square holding nothing but
-        # the wheels stays in on the strength of its context. Taking the lower
-        # of the two instead was tried and is too strict — it throws away the
-        # tiles where the object is genuinely cut in half, which on a 4x4 grid
-        # is most of them.
-        confidence = np.sqrt(confidence * probability(tight))
+    # The two layouts are different questions and want different answers. Nine
+    # tiles are nine separate photographs: "is there a bus in this one" is a
+    # question each of them can be asked on its own. Sixteen are one photograph
+    # cut up, where a quarter of a bus fills four squares and none of them is a
+    # picture of a bus — asking each square on its own gets you the middle of
+    # the object and misses its edges, and asking each square plus a margin of
+    # its neighbours gets you the empty tarmac beside it too.
+    cut_up = len(boxes) == 16 and os.environ.get("POSTERN_CLIP_LAYOUT") != "tiles"
+    chosen = occluded(panel, boxes, probability) if cut_up else scored(panel, boxes, probability)
 
     hits = []
-    for index, (box, score) in enumerate(zip(boxes, confidence)):
-        if score >= CONFIDENCE:
-            x, y, w, h = box
-            hits.append((x + w / 2, y + h / 2))
-            print(f"tile {index}: {score:.2f}", file=sys.stderr)
-
-    if not hits:
-        print(f"best was {confidence.max():.2f}, below {CONFIDENCE}", file=sys.stderr)
+    for index in sorted(chosen):
+        x, y, w, h = boxes[index]
+        hits.append((x + w / 2, y + h / 2))
     return hits
+
+
+def scored(panel: Image.Image, boxes: list, probability) -> set:
+    """Every tile that is a picture of the thing, asked one at a time.
+
+    For a 3x3 grid, which is what it is: nine photographs that happen to be
+    displayed together. Also the fallback for a 4x4 on a model too coarse for
+    the occlusion pass, where each square is scored twice — with a margin of
+    its neighbours, so a sixteenth of a bus is recognisable at all, and bare,
+    so the tarmac that merely borrows one is dropped — and combined with their
+    geometric mean.
+    """
+    confidence = probability([crop(panel, box, 0.0) for box in boxes])
+    if len(boxes) == 16:
+        confidence = np.sqrt(confidence * probability(
+            [crop(panel, box, TILE_MARGIN) for box in boxes]))
+
+    chosen = {i for i, score in enumerate(confidence) if score >= CONFIDENCE}
+    for i in sorted(chosen):
+        print(f"tile {i}: {confidence[i]:.2f}", file=sys.stderr)
+    if not chosen:
+        print(f"best was {confidence.max():.2f}, below {CONFIDENCE}", file=sys.stderr)
+    return chosen
+
+
+def occluded(panel: Image.Image, boxes: list, probability) -> set:
+    """Every square the thing is actually in, found by taking squares away.
+
+    For a 4x4 grid, which is one photograph. Rather than ask what each square
+    is, this asks what the picture stops being without it: grey out a square,
+    score the whole picture again, and the drop is how much of the answer was
+    in there. A square holding the front of a bus takes the bus with it; a
+    square of tarmac beside it changes nothing.
+
+    It is done one square at a time, greedily, because a picture with two
+    bicycles in it does not stop being a picture of a bicycle when you cover
+    one — measured, the second bicycle's own square dropped the score by 0.01,
+    which is indistinguishable from tarmac. Covering the strongest square for
+    good and asking again is what makes the next one visible: on that grid the
+    same square then dropped it by 0.39.
+
+    Stopping is the other half. The loop ends when what is left no longer looks
+    like the thing at all, which is the signal that every square holding it has
+    been taken — not when the drops get small, since the first drop on a
+    crowded grid is the smallest one there is.
+    """
+    x0 = min(b[0] for b in boxes)
+    y0 = min(b[1] for b in boxes)
+    x1 = max(b[0] + b[2] for b in boxes)
+    y1 = max(b[1] + b[3] for b in boxes)
+    whole = panel.crop((int(x0), int(y0), int(x1), int(y1)))
+
+    rects = [(int(x - x0), int(y - y0), int(x - x0 + w), int(y - y0 + h)) for x, y, w, h in boxes]
+
+    def without(covered):
+        out = whole.copy()
+        for i in covered:
+            out.paste(OCCLUSION_GREY, rects[i])
+        return out
+
+    chosen: list[int] = []
+    for _ in range(len(boxes)):
+        remaining = probability([without(chosen)])[0]
+        if remaining < OCCLUSION_STOP:
+            print(f"what is left scores {remaining:.2f}, nothing more to find", file=sys.stderr)
+            break
+
+        rest = [i for i in range(len(boxes)) if i not in chosen]
+        drops = remaining - probability([without(chosen + [i]) for i in rest])
+
+        best = int(np.argmax(drops))
+        if drops[best] < OCCLUSION_DROP:
+            print(f"best square only drops {drops[best]:.2f}, stopping", file=sys.stderr)
+            break
+
+        print(f"tile {rest[best]}: takes {drops[best]:.2f} of {remaining:.2f} with it",
+              file=sys.stderr)
+        chosen.append(rest[best])
+
+    return set(chosen)
 
 
 def main() -> int:
