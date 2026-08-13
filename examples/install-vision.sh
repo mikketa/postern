@@ -1,10 +1,10 @@
 #!/bin/sh
-# Sets up examples/solver-clip.py: a virtualenv, three model files, and a
-# wrapper to hand to -image-solver.
+# Sets up examples/solver-vision.py: a virtualenv, the models, and a wrapper
+# to hand to -image-solver.
 #
-#     examples/install-clip.sh ~/.cache/postern-clip
+#     examples/install-vision.sh ~/.cache/postern-vision
 #     postern solve -kind recaptcha-v2 -url ... -sitekey ... \
-#         -image-solver ~/.cache/postern-clip/solve
+#         -image-solver ~/.cache/postern-vision/solve
 #
 # A second argument picks the model. patch16 is the default because it is what
 # the 4x4 pass needs: those squares are found by covering them up and seeing how
@@ -21,9 +21,9 @@
 # for when you want the example working in one command instead of five.
 set -eu
 
-DIR=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/postern-clip}
+DIR=${1:-${XDG_CACHE_HOME:-$HOME/.cache}/postern-vision}
 MODEL=${2:-patch16}
-SCRIPT=$(cd "$(dirname "$0")" && pwd)/solver-clip.py
+SCRIPT=$(cd "$(dirname "$0")" && pwd)/solver-vision.py
 
 # Both calibrated over saved grids with the answers checked by eye. LAYOUT
 # forces the one-square-at-a-time path on the model that needs it.
@@ -61,6 +61,25 @@ fetch() {
 fetch "$BASE/onnx/vision_model_quantized.onnx" clip-vision.onnx
 fetch "$BASE/onnx/text_model_quantized.onnx" clip-text.onnx
 fetch "$BASE/tokenizer.json" clip-tokenizer.json
+
+# The segmentation model, which is what answers a 4x4 grid: those squares are
+# one photograph cut up, and which of them hold the bus is a question about
+# pixels. SegFormer-B0 on ADE20K, 15MB, and the 4x4 path is simply not taken
+# without it.
+#
+# B4 is markedly better — over saved grids with the answers checked by eye, one
+# tick in excess against five for B0 — but it is 257MB and ships only as
+# PyTorch weights. To use it instead:
+#
+#   pip install torch transformers onnx
+#   python -c "
+#   import torch; from transformers import SegformerForSemanticSegmentation
+#   m = SegformerForSemanticSegmentation.from_pretrained(
+#       'nvidia/segformer-b4-finetuned-ade-512-512').eval()
+#   torch.onnx.export(m, (torch.randn(1,3,512,512),), 'segment.onnx',
+#                     input_names=['pixel_values'], output_names=['logits'],
+#                     opset_version=17, dynamo=False)"
+fetch https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model.onnx segment.onnx
 
 cat > solve <<EOF
 #!/bin/sh
