@@ -40,6 +40,7 @@ tiles, or a hosted vision model all plug in the same way — the protocol is a P
 in and coordinates out.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -574,6 +575,26 @@ def main() -> int:
 
 
 
+def encoder_fingerprint() -> str:
+    """What the installed picture encoder is, as a number a head can name.
+
+    The file itself, hashed. Version strings and model names are not enough:
+    the quantised and unquantised exports of one model share both, and so do
+    two exports made by different tools from the same weights.
+    """
+    global _fingerprint
+    if _fingerprint is None:
+        digest = hashlib.sha256()
+        with open(os.path.join(directory(), "clip-vision.onnx"), "rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        _fingerprint = digest.hexdigest()
+    return _fingerprint
+
+
+_fingerprint: str | None = None
+
+
 def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
     """Which tiles hold the thing, according to a head trained for it.
 
@@ -589,6 +610,23 @@ def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
             head = json.load(handle)
         if head.get("model") and head["model"] != os.environ.get("POSTERN_CLIP_MODEL", "patch16"):
             print(f"ignoring {os.path.basename(path)}: fitted on {head['model']}", file=sys.stderr)
+            continue
+
+        # And the same encoder, not merely the same size of encoder. A head is
+        # 512 numbers read against one particular set of embeddings; point it at
+        # another export of nominally the same model and the numbers still
+        # multiply, still come out between zero and one, and mean nothing. That
+        # is not hypothetical — a head measured at 0.83 on a tile scored 0.16 on
+        # the same tile under a different export of patch16, so it ticked
+        # nothing, passed on every crosswalk grid, and two live runs died asking
+        # for a category the solver was supposed to be able to answer. Nothing
+        # in the output looked wrong; the scores were simply low.
+        fitted = head.get("encoder")
+        if fitted and fitted != encoder_fingerprint():
+            print(f"ignoring {os.path.basename(path)}: fitted on a different export of "
+                  f"{head.get('model', 'clip')} ({fitted[:12]}, this one is "
+                  f"{encoder_fingerprint()[:12]}). Refit it with examples/train-probe.py "
+                  f"against the installed encoder.", file=sys.stderr)
             continue
 
         weights = np.asarray(head["weights"], dtype=np.float32)

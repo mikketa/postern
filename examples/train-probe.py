@@ -79,6 +79,25 @@ RATE = 1.0
 REGULARISATION = 0.003
 
 
+def fingerprint(path):
+    """The encoder this head is being fitted against, as a hash of the file.
+
+    A head is 512 numbers read against one particular set of embeddings. Point
+    it at another export of nominally the same model — quantised instead of
+    not, exported by another tool, a different revision on the hub — and the
+    arithmetic still works and the answers are noise. Measured: a head reading
+    0.83 on a tile read 0.16 on the same tile under a different export of the
+    same model name, which looks exactly like a head that has learned nothing.
+    So the head names the file, and the solver refuses to read it against
+    anything else.
+    """
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def encode(vision, images):
     batch = np.stack([
         ((np.asarray(image.convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE),
@@ -234,10 +253,11 @@ def main():
     with open(args.labels) as handle:
         labels = {str(k): set(v) for k, v in json.load(handle).items()}
 
+    encoder = os.path.join(args.models, "clip-vision.onnx")
     options = ort.SessionOptions()
     options.log_severity_level = 3
-    vision = ort.InferenceSession(os.path.join(args.models, "clip-vision.onnx"), options,
-                                  providers=["CPUExecutionProvider"])
+    vision = ort.InferenceSession(encoder, options, providers=["CPUExecutionProvider"])
+    print(f"fitting against {encoder} ({fingerprint(encoder)[:12]})")
 
     held = {k: v for k, v in labels.items() if k in set(args.hold)}
     training = {k: v for k, v in labels.items() if k not in held}
@@ -268,6 +288,7 @@ def main():
         json.dump({
             "category": args.category,
             "model": args.model,
+            "encoder": fingerprint(encoder),
             "bias": float(bias),
             "weights": [round(float(v), 6) for v in weights],
             "bar": round(bar, 2) if bar is not None else None,
