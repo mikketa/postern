@@ -42,9 +42,12 @@ package challenge
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -132,6 +135,21 @@ const (
 
 	// solverErrLines is how much of a failing solver's output to quote back.
 	solverErrLines = 3
+
+	// blankAttempts is how many times to wait and photograph the grid again
+	// when what came back has nothing in it.
+	blankAttempts = 6
+
+	// blankTilesPercent is how much of the grid has to be one flat colour for
+	// the whole thing to count as unpainted. Not all of it: a real grid can
+	// hold a tile of plain sky, and a grid still arriving usually has one or
+	// two tiles already in.
+	blankTilesPercent = 60
+
+	// blankRange is how much a tile's brightness may vary and still be called
+	// flat, out of 65535, and blankStride how many pixels apart to sample.
+	blankRange  = 900
+	blankStride = 4
 )
 
 // errPass is that refusal, travelling back up to the round loop.
@@ -338,10 +356,32 @@ func ready(ctx context.Context, frame *Frame) error {
 }
 
 // inspect photographs the grid as it stands and asks what to click.
+//
+// The photograph is checked before it is sent anywhere. The document can say
+// every picture has loaded while the grid on screen is still blank — reCAPTCHA
+// fades them in, and an image that is `complete` with a decoded size is not yet
+// an image that has been painted. Measured over 88 captured panels: fourteen of
+// them, one in six, were entirely flat squares. The solver did what anyone
+// would do with a blank grid and found nothing in it, and the round was spent.
 func inspect(ctx context.Context, frame *Frame, solverCmd string) ([]point, error) {
 	shot, err := capture(ctx, frame)
 	if err != nil {
 		return nil, err
+	}
+
+	for attempt := 1; blank(shot, frame.View.Tiles) && attempt <= blankAttempts; attempt++ {
+		if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
+			return nil, err
+		}
+		if err := frame.Reread(ctx); err != nil {
+			return nil, err
+		}
+		if !frame.Open() {
+			return nil, nil
+		}
+		if shot, err = capture(ctx, frame); err != nil {
+			return nil, err
+		}
 	}
 
 	path, cleanup, err := writeTemp(shot)
@@ -684,4 +724,69 @@ func encodeTiles(tiles []Box) string {
 		parts = append(parts, fmt.Sprintf("%.0f,%.0f,%.0f,%.0f", t.X, t.Y, t.W, t.H))
 	}
 	return strings.Join(parts, ";")
+}
+
+// blank reports that the grid has not been painted yet.
+//
+// A tile that has arrived is a photograph, and a photograph has variation in
+// it. A tile still waiting is one flat colour — white, or the grey reCAPTCHA
+// parks there. The document is not a reliable witness to this: it reports the
+// pictures as loaded while they are still fading in, so the panel is asked the
+// only question that settles it, which is what it looks like.
+func blank(shot []byte, tiles []Box) bool {
+	if len(tiles) == 0 {
+		return false
+	}
+
+	img, err := png.Decode(bytes.NewReader(shot))
+	if err != nil {
+		// Not our decision to make on a screenshot we cannot read.
+		return false
+	}
+
+	flat := 0
+	for _, tile := range tiles {
+		if uniform(img, tile) {
+			flat++
+		}
+	}
+	return flat*100 >= len(tiles)*blankTilesPercent
+}
+
+// uniform reports whether a tile is all one colour, give or take the noise a
+// JPEG leaves behind.
+func uniform(img image.Image, tile Box) bool {
+	bounds := img.Bounds()
+	x0, y0 := bounds.Min.X+int(tile.X), bounds.Min.Y+int(tile.Y)
+	x1, y1 := x0+int(tile.W), y0+int(tile.H)
+	if x1 > bounds.Max.X {
+		x1 = bounds.Max.X
+	}
+	if y1 > bounds.Max.Y {
+		y1 = bounds.Max.Y
+	}
+	if x1-x0 < blankStride || y1-y0 < blankStride {
+		return false
+	}
+
+	// Sampled rather than exhaustive: a tile is thousands of pixels and this
+	// runs on every round. A grid that is genuinely blank is blank everywhere,
+	// so every few pixels is as good as all of them.
+	var lo, hi uint32 = 65535, 0
+	for y := y0; y < y1; y += blankStride {
+		for x := x0; x < x1; x += blankStride {
+			r, g, b, _ := img.At(x, y).RGBA()
+			grey := (r*299 + g*587 + b*114) / 1000
+			if grey < lo {
+				lo = grey
+			}
+			if grey > hi {
+				hi = grey
+			}
+			if hi-lo > blankRange {
+				return false
+			}
+		}
+	}
+	return true
 }

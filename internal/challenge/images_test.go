@@ -1,7 +1,11 @@
 package challenge
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,5 +214,102 @@ func TestTileAtFindsWhatIsUnderAPoint(t *testing.T) {
 	// The whole point of the lookup.
 	if tile := view.TileAt(150, 50); tile == nil || !tile.Selected {
 		t.Error("a point on a ticked tile has to come back ticked, or postern clicks it off")
+	}
+}
+
+// TestBlankSpotsAnUnpaintedGrid covers the check that keeps a solver from being
+// handed a photograph of nothing.
+//
+// reCAPTCHA fades its pictures in, and the document reports them as loaded
+// before they have been painted. Measured over 88 panels captured from live
+// runs, fourteen were entirely flat squares — one round in six spent asking a
+// vision model to find buses in a blank grid.
+func TestBlankSpotsAnUnpaintedGrid(t *testing.T) {
+	tiles := []Box{
+		{X: 0, Y: 0, W: 60, H: 60}, {X: 60, Y: 0, W: 60, H: 60},
+		{X: 0, Y: 60, W: 60, H: 60}, {X: 60, Y: 60, W: 60, H: 60},
+	}
+
+	cases := []struct {
+		name string
+		draw func(*image.RGBA)
+		want bool
+	}{
+		{
+			name: "a grid that has not arrived",
+			draw: func(img *image.RGBA) { fill(img, 0, 0, 120, 120, 255, 255, 255) },
+			want: true,
+		},
+		{
+			name: "the grey reCAPTCHA parks there",
+			draw: func(img *image.RGBA) { fill(img, 0, 0, 120, 120, 238, 238, 238) },
+			want: true,
+		},
+		{
+			name: "photographs",
+			draw: noise,
+			want: false,
+		},
+		{
+			name: "one tile of plain sky among photographs",
+			draw: func(img *image.RGBA) {
+				noise(img)
+				fill(img, 0, 0, 60, 60, 150, 190, 230)
+			},
+			want: false,
+		},
+		{
+			name: "three tiles still arriving",
+			draw: func(img *image.RGBA) {
+				noise(img)
+				fill(img, 0, 0, 120, 60, 255, 255, 255)
+				fill(img, 0, 60, 60, 120, 255, 255, 255)
+			},
+			want: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			img := image.NewRGBA(image.Rect(0, 0, 120, 120))
+			c.draw(img)
+
+			var buf bytes.Buffer
+			if err := png.Encode(&buf, img); err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+
+			if got := blank(buf.Bytes(), tiles); got != c.want {
+				t.Errorf("blank = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// A screenshot that will not decode is not evidence of anything.
+	if blank([]byte("not a png"), tiles) {
+		t.Error("an unreadable screenshot was called blank")
+	}
+	// Neither is a panel with no tiles read out of it.
+	if blank(nil, nil) {
+		t.Error("a panel with no tiles was called blank")
+	}
+}
+
+func fill(img *image.RGBA, x0, y0, x1, y1 int, r, g, b uint8) {
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			img.SetRGBA(x, y, color.RGBA{R: r, G: g, B: b, A: 255})
+		}
+	}
+}
+
+// noise is a stand-in for photographs: varied enough that no tile is flat.
+func noise(img *image.RGBA) {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			v := uint8((x*7 + y*13) % 256)
+			img.SetRGBA(x, y, color.RGBA{R: v, G: 255 - v, B: uint8((x * y) % 256), A: 255})
+		}
 	}
 }
