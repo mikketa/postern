@@ -162,6 +162,19 @@ will still be working tomorrow. Asking for more than the fleet can rest through 
 **503 with `Retry-After`** rather than burning identities to keep up: that is the fleet
 working, not failing.
 
+A running fleet is watchable, which is what lets it be sized:
+
+```console
+$ curl -s localhost:8099/fleet | jq '.ready, .identities[] | {name, solves, failures, resting}'
+```
+
+The useful number is not the total solved but the ratio per identity. Identities failing
+together is an address or a provider going bad; one failing alone is that profile burnt; and
+a pool permanently at zero ready wants more identities rather than more patience. `/health`
+carries the same ready-of-size count, so a monitor can tell "everything is resting" — which
+is healthy — from "the server is broken". Neither endpoint returns the proxy, only whether
+there is one: the identities file holds passwords.
+
 Browsers are started per solve and closed afterwards, which costs a second and buys two
 things — the profile is only written when Chrome is *closed*, and memory is bounded by how
 many solves run at once rather than by how many identities exist.
