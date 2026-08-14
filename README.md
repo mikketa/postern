@@ -399,10 +399,16 @@ A fleet left running therefore accumulates confirmed examples of what things loo
 the categories it can already answer pay for the ones it cannot. Negatives still have to come
 from a person looking at a grid, which is what the by-eye labels above are for.
 
-Fitted on 21 tiles from 6 grids and measured on a three-round challenge from a later run
-that shared no tile with it: **one crossing missed, nothing ticked in excess** — the miss
-was a crossing half hidden behind a market stall — against roughly 4 in excess per grid for
-zero-shot CLIP, which on that same grid ticked six squares where four were wanted. Three
+Fitted on 32 tiles from 12 grids. Held out against a three-round challenge from a later run,
+the version fitted on six grids missed one crossing and ticked three squares in excess — and
+what it missed was not a hard case but the plainest crossing in the grid, full-width white
+bars across the road, scored 0.30 to 0.34 against its bar of 0.40. That is worth stating
+because of what it costs: on a dynamic grid a missed square is a wrong answer, the challenge
+comes back, and a run that should have taken six rounds took thirteen and produced nothing.
+Those three grids are now in the corpus and are answered exactly, which is learning the case
+rather than generalising to it; the honest number is the calibration, four mistakes across
+twelve grids each left out in turn. Against roughly 4 in excess per grid for
+zero-shot CLIP, which on one such grid ticked six squares where four were wanted. Three
 things earn their keep here, each measured. Each head carries **the bar it should be read
 at**, found by fitting without one grid at a time and keeping whichever bar costs fewest
 mistakes — a number fixed in the solver cannot suit every head, and an earlier head that
