@@ -47,10 +47,12 @@ if [ ! -x venv/bin/python ]; then
 	./venv/bin/pip install --quiet onnxruntime numpy pillow tokenizers
 fi
 
-# The quantised encoders: 90MB and 64MB rather than 350MB and 254MB. Postern
-# starts a solver per grid, so load time is paid every round — the full-precision
-# pair took two minutes a grid on a CPU, which is longer than a challenge stays
-# valid.
+# The quantised encoders: 84MB and 64MB rather than 345MB and 254MB. Postern
+# starts a solver per grid, so the load is paid every round, and that is what the
+# quantisation buys: measured on this machine, 161ms to load the quantised
+# vision encoder and 347ms to run nine tiles through it, against 475ms and 550ms
+# for the full-precision export. Half a second a grid either way — the file size
+# is the real cost, not the arithmetic.
 fetch() {
 	[ -s "$2" ] && return 0
 	echo "fetching $2"
@@ -141,6 +143,26 @@ for head in "$(dirname "$SCRIPT")"/probe-*.json; do
 		cp "$head" .
 		echo "installed $(basename "$head")"
 	fi
+done
+
+# A head may name an encoder of its own, and the full-precision patch16 is the
+# one that does: measured over twelve labelled crosswalk grids, ten answered
+# exactly against eight for the quantised export, and the tile it stops missing
+# is a crossing painted across a whole carriageway — not a borderline call.
+#
+# It is 345MB against 84MB and half a second a grid against a fifth of one,
+# which is why it is not simply made the default: it buys nothing measurable on
+# the zero-shot path, whose thresholds are calibrated against the quantised
+# export anyway. Only the heads that ask for it pay for it, and only the
+# categories that have a head reach it.
+for head in probe-*.json; do
+	[ -e "$head" ] || continue
+	wants=$(sed -n 's/.*"encoder_file": *"\([^"]*\)".*/\1/p' "$head")
+	case $wants in
+	'' | clip-vision.onnx) continue ;;
+	clip-vision-fp32.onnx) fetch "$BASE/onnx/vision_model.onnx" "$wants" ;;
+	*) echo "$head wants $wants, which this script does not know how to fetch" >&2 ;;
+	esac
 done
 
 cat > solve <<EOF
