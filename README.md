@@ -128,17 +128,25 @@ time is stranger than either half alone.
 
 ```sh
 cat > identities.txt <<'EOF'
-# name        proxy (optional)
-alice         http://user:pass@resi-1.example:8000
-bob           http://user:pass@resi-2.example:8000
-carol
+# name    proxy — as your provider sells it, or as a url
+alice     gate.example.com:8000:user-session-1:hunter2
+bob       gate.example.com:8000:user-session-2:hunter2
+carol     socks5://127.0.0.1:9050
 EOF
 
 postern serve -identities identities.txt -warm-pages sites.txt
 ```
 
 Adding an identity is adding a line. Its profile is created next to the others, and it takes
-itself browsing once before its first solve — nothing to set up by hand.
+itself browsing once before its first solve — nothing to set up by hand. Proxies are taken in
+the `host:port:user:pass` form providers actually ship, so a supplier's list can be pasted in
+as it arrives; a mistyped one is refused at startup rather than becoming an identity that
+quarantines itself for no reason.
+
+Two configurations defeat the whole exercise silently, so postern says so on startup: several
+identities behind **one proxy** are one identity wearing several profiles, and several with
+**no proxy at all** share this machine's address and will wear out exactly as fast as a single
+identity would.
 
 Three rules do the work:
 
