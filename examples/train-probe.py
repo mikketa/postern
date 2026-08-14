@@ -294,6 +294,8 @@ def main():
     parser.add_argument("category", help="what the head is for, e.g. crosswalk")
     parser.add_argument("--models", default=".", help="where the CLIP encoder lives")
     parser.add_argument("--model", default="patch16", help="which encoder that is")
+    parser.add_argument("--encoder", default="clip-vision.onnx",
+                        help="the encoder file to fit against, inside --models")
     parser.add_argument("--hold", nargs="*", default=[],
                         help="panels to keep out of training and test on")
     parser.add_argument("--answers", default="",
@@ -314,7 +316,7 @@ def main():
         with open(args.answers) as handle:
             positives = {str(k): set(v) for k, v in json.load(handle).items() if v}
 
-    encoder = os.path.join(args.models, "clip-vision.onnx")
+    encoder = os.path.join(args.models, args.encoder)
     options = ort.SessionOptions()
     options.log_severity_level = 3
     vision = ort.InferenceSession(encoder, options, providers=["CPUExecutionProvider"])
@@ -356,6 +358,13 @@ def main():
         json.dump({
             "category": args.category,
             "model": args.model,
+            # Both, and they answer different questions: the file is which
+            # encoder to load for this head, the hash is whether the one that
+            # loaded is the one it was fitted on. A head may name an encoder the
+            # rest of the solver does not use — the full-precision export is
+            # measurably better here and no better anywhere else — so the file
+            # cannot be assumed and the hash cannot be skipped.
+            "encoder_file": args.encoder,
             "encoder": fingerprint(encoder),
             "bias": float(bias),
             "weights": [round(float(v), 6) for v in weights],
