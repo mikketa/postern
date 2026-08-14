@@ -21,6 +21,7 @@ import (
 	"github.com/mikketa/postern/internal/api"
 	"github.com/mikketa/postern/internal/browser"
 	"github.com/mikketa/postern/internal/display"
+	"github.com/mikketa/postern/internal/pool"
 	"github.com/mikketa/postern/internal/solver"
 )
 
@@ -130,6 +131,60 @@ func applyScreen(opts *browser.Options, screen string) error {
 // design and belongs on a schedule — once a day, say, from cron — not in front
 // of every token. Doing it inline would also make every solve slower for a
 // benefit that only accrues over days.
+// buildFleet reads the identities file and pairs it with a pool.
+//
+// One identity per line, "name" or "name proxy". The profile is derived from
+// the name next to the configured profile directory, so adding an identity is
+// adding a line — nothing to create by hand, and the fleet warms a new profile
+// on its first outing.
+func buildFleet(path, pagesPath string, opts browser.Options, log *slog.Logger) (*pool.Fleet, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("serve: read %s: %w", path, err)
+	}
+
+	base := opts.UserDataDir
+	if base == "" {
+		base = defaultProfileDir()
+	}
+
+	var identities []*pool.Identity
+	for line := range strings.SplitSeq(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 2 {
+			return nil, fmt.Errorf("serve: %q is not \"name\" or \"name proxy\"", line)
+		}
+		identity := &pool.Identity{
+			Name:    fields[0],
+			Profile: filepath.Join(base, "fleet", fields[0]),
+		}
+		if len(fields) == 2 {
+			identity.Proxy = fields[1]
+		}
+		identities = append(identities, identity)
+	}
+	if len(identities) == 0 {
+		return nil, fmt.Errorf("serve: %s holds no identities", path)
+	}
+
+	var pages []string
+	if pagesPath != "" {
+		if pages, err = readPages(pagesPath); err != nil {
+			return nil, err
+		}
+	}
+
+	p, err := pool.New(identities, filepath.Join(base, "fleet", "state.json"), pool.Settings{})
+	if err != nil {
+		return nil, err
+	}
+	return pool.NewFleet(p, opts, pages, log), nil
+}
+
 func runWarm(args []string) error {
 	fs := flag.NewFlagSet("warm", flag.ExitOnError)
 	opts, screen, mode := browserFlags(fs)
@@ -205,6 +260,11 @@ func runServe(args []string) error {
 	addr := fs.String("addr", "127.0.0.1:8099", "address to listen on")
 	timeout := fs.Duration("timeout", 60*time.Second, "default per-solve timeout")
 	concurrency := fs.Int("concurrency", 2, "solves running at the same time")
+	identities := fs.String("identities", "",
+		"file of identities, one \"name proxy\" per line: each gets its own profile, rests "+
+			"between solves and is set aside when it stops working")
+	warmPages := fs.String("warm-pages", "",
+		"file of urls a new identity browses once before its first solve")
 	imageSolver := fs.String("image-solver", "",
 		"command answering picture grids: it receives a PNG path and prints one x,y per line")
 	if err := fs.Parse(args); err != nil {
@@ -219,15 +279,40 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	b, closeBrowser, err := startBrowser(ctx, opts, display.Mode(*mode))
-	if err != nil {
-		return err
+	// A fleet starts its own browser per solve, one identity at a time, so the
+	// shared one is only started when there is no fleet to start instead.
+	var handler *api.Server
+	if *identities == "" {
+		b, closeBrowser, err := startBrowser(ctx, opts, display.Mode(*mode))
+		if err != nil {
+			return err
+		}
+		defer closeBrowser()
+		handler = api.New(b, *timeout, *concurrency, *imageSolver, log)
+	} else {
+		// The fleet starts its browsers itself, so the screen they draw on has
+		// to be started here and shared: one Xvfb for all of them, not one per
+		// solve.
+		if !opts.Headless {
+			screen, err := display.Ensure(ctx, opts.ScreenWidth, opts.ScreenHeight, display.Mode(*mode))
+			if err != nil {
+				return err
+			}
+			defer screen.Close()
+			opts.Env = screen.Env()
+		}
+
+		fleet, err := buildFleet(*identities, *warmPages, *opts, log)
+		if err != nil {
+			return err
+		}
+		log.Info("serving from a fleet", "identities", fleet.Size(), "ready", fleet.Ready())
+		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log)
 	}
-	defer closeBrowser()
 
 	srv := &http.Server{
 		Addr:    *addr,
-		Handler: api.New(b, *timeout, *concurrency, *imageSolver, log).Handler(),
+		Handler: handler.Handler(),
 	}
 
 	errc := make(chan error, 1)

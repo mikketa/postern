@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,9 +13,21 @@ import (
 	"github.com/mikketa/postern/internal/solver"
 )
 
-// Server answers solve requests using a single shared browser.
+// Borrower hands out a browser to solve with and takes it back afterwards.
+//
+// Two shapes fit: one browser shared by every request, which is what a single
+// operator wants, and a fleet of identities taking turns, which is what any
+// volume needs. The handler cannot tell the difference, and should not — see
+// internal/pool for why the second exists.
+type Borrower interface {
+	Borrow(ctx context.Context) (*browser.Browser, func(solved bool), error)
+	Ready() int
+	Size() int
+}
+
+// Server answers solve requests.
 type Server struct {
-	browser *browser.Browser
+	fleet   Borrower
 	timeout time.Duration
 	log     *slog.Logger
 
@@ -26,13 +39,29 @@ type Server struct {
 	slots chan struct{}
 }
 
-// New builds a Server. maxConcurrent below 1 is treated as 1.
+// New builds a Server over one shared browser. maxConcurrent below 1 is
+// treated as 1.
 func New(b *browser.Browser, timeout time.Duration, maxConcurrent int, imageSolver string, log *slog.Logger) *Server {
+	return NewFleet(shared{browser: b}, timeout, maxConcurrent, imageSolver, log)
+}
+
+// shared is the one-browser Borrower: every request gets the same browser and
+// giving it back does nothing.
+type shared struct{ browser *browser.Browser }
+
+func (s shared) Borrow(context.Context) (*browser.Browser, func(bool), error) {
+	return s.browser, func(bool) {}, nil
+}
+func (s shared) Ready() int { return 1 }
+func (s shared) Size() int  { return 1 }
+
+// NewFleet builds a Server over anything that can lend a browser.
+func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSolver string, log *slog.Logger) *Server {
 	if maxConcurrent < 1 {
 		maxConcurrent = 1
 	}
 	return &Server{
-		browser:     b,
+		fleet:       fleet,
 		timeout:     timeout,
 		imageSolver: imageSolver,
 		log:         log,
@@ -86,7 +115,20 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := solver.Solve(r.Context(), s.browser, solver.Request{
+	chrome, give, err := s.fleet.Borrow(r.Context())
+	if err != nil {
+		// Everything is resting. That is the fleet working as intended under
+		// more load than it has identities for, so say so plainly and let the
+		// caller back off rather than pretending the solve failed.
+		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size())
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	solved := false
+	defer func() { give(solved) }()
+
+	result, err := solver.Solve(r.Context(), chrome, solver.Request{
 		Kind:        solver.Kind(req.Kind),
 		URL:         req.URL,
 		SiteKey:     req.SiteKey,
@@ -104,6 +146,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	solved = true
 	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed)
 	writeJSON(w, http.StatusOK, solveResponse{
 		Token:     result.Token,
