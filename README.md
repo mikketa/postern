@@ -115,6 +115,49 @@ profile is supposed to keep, which it demonstrably did not before.
 
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
+## Running it at volume
+
+One browser answering every request is one identity, and an identity wears out.
+Measured on this machine: three tokens in five early in an evening, none in five after about
+twenty-five solves from the same address and profile, with no code change in between. Nothing
+got worse at answering — the identity was used up.
+
+So `serve` can work from a **fleet**. An identity is a profile and a way out, kept together
+for life; the pairing matters, because a profile that browses from a different address every
+time is stranger than either half alone.
+
+```sh
+cat > identities.txt <<'EOF'
+# name        proxy (optional)
+alice         http://user:pass@resi-1.example:8000
+bob           http://user:pass@resi-2.example:8000
+carol
+EOF
+
+postern serve -identities identities.txt -warm-pages sites.txt
+```
+
+Adding an identity is adding a line. Its profile is created next to the others, and it takes
+itself browsing once before its first solve — nothing to set up by hand.
+
+Three rules do the work:
+
+| | |
+| --- | --- |
+| **Rest** | every identity waits a few minutes after a solve, spread so the fleet does not solve on one beat |
+| **Quarantine** | three consecutive failures sets an identity aside for the best part of an hour, because a run of failures is almost never about the answers |
+| **Memory** | how each identity has done is written to disk, so a restart does not hand a worn one a clean slate |
+
+Throughput is therefore not how fast one solve is — it is roughly *identities ÷ rest*. Ten
+identities resting four minutes each is about two solves a minute, indefinitely, and they
+will still be working tomorrow. Asking for more than the fleet can rest through returns
+**503 with `Retry-After`** rather than burning identities to keep up: that is the fleet
+working, not failing.
+
+Browsers are started per solve and closed afterwards, which costs a second and buys two
+things — the profile is only written when Chrome is *closed*, and memory is bounded by how
+many solves run at once rather than by how many identities exist.
+
 ## How it works
 
 ```
