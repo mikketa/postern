@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mikketa/postern/internal/browser"
+	"github.com/mikketa/postern/internal/pool"
 	"github.com/mikketa/postern/internal/solver"
 )
 
@@ -74,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /solve", s.handleSolve)
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /fleet", s.handleFleet)
 	return mux
 }
 
@@ -155,7 +157,61 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// Ready and size rather than a bare "ok": a server whose identities are all
+	// resting is healthy and cannot take work, and a monitor needs to tell
+	// those apart from a server that is broken.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status": "ok",
+		"ready":  s.fleet.Ready(),
+		"size":   s.fleet.Size(),
+	})
+}
+
+// handleFleet reports each identity and how it has been doing.
+//
+// A fleet that cannot be watched cannot be sized. The number that matters is
+// not the total solved but the ratio per identity: identities that fail
+// together are an address or a provider going bad, one that fails alone is its
+// own profile burnt, and a pool permanently at zero ready needs more identities
+// rather than more patience. None of that is visible from the outside without
+// this.
+func (s *Server) handleFleet(w http.ResponseWriter, _ *http.Request) {
+	reporter, ok := s.fleet.(interface{ Stats() []pool.Identity })
+	if !ok {
+		writeError(w, http.StatusNotFound, "not serving from a fleet")
+		return
+	}
+
+	type entry struct {
+		Name      string    `json:"name"`
+		Solves    int       `json:"solves"`
+		Failures  int       `json:"failures"`
+		Streak    int       `json:"streak"`
+		Warmed    bool      `json:"warmed"`
+		LastUsed  time.Time `json:"last_used,omitzero"`
+		RestUntil time.Time `json:"rest_until,omitzero"`
+		Resting   bool      `json:"resting"`
+		Proxied   bool      `json:"proxied"`
+	}
+
+	now := time.Now()
+	out := make([]entry, 0)
+	for _, identity := range reporter.Stats() {
+		out = append(out, entry{
+			Name: identity.Name, Solves: identity.Solves, Failures: identity.Failures,
+			Streak: identity.Streak, Warmed: identity.Warmed,
+			LastUsed: identity.LastUsed, RestUntil: identity.RestUntil,
+			Resting: now.Before(identity.RestUntil),
+			// Whether, not which: the file holds passwords.
+			Proxied: identity.Proxy != "",
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ready":      s.fleet.Ready(),
+		"size":       s.fleet.Size(),
+		"identities": out,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
