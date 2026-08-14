@@ -29,6 +29,7 @@ const usage = `postern - captcha solver driving a real Chrome
 usage:
   postern serve [flags]
   postern solve -url <page> -sitekey <key> [-kind <kind>] [flags]
+  postern warm -pages <file> [flags]
   postern version
 
 run "postern <command> -h" for the flags of a command.
@@ -48,6 +49,8 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		err = runServe(os.Args[2:])
+	case "warm":
+		err = runWarm(os.Args[2:])
 	case "solve":
 		err = runSolve(os.Args[2:])
 	case "version", "-version", "--version":
@@ -119,6 +122,81 @@ func applyScreen(opts *browser.Options, screen string) error {
 	}
 	opts.ScreenWidth, opts.ScreenHeight = w, h
 	return nil
+}
+
+// runWarm gives the profile somewhere to have been.
+//
+// Kept as its own command rather than folded into solve: warming is slow by
+// design and belongs on a schedule — once a day, say, from cron — not in front
+// of every token. Doing it inline would also make every solve slower for a
+// benefit that only accrues over days.
+func runWarm(args []string) error {
+	fs := flag.NewFlagSet("warm", flag.ExitOnError)
+	opts, screen, mode := browserFlags(fs)
+	list := fs.String("pages", "",
+		"file of URLs to visit, one per line; blank lines and # comments ignored")
+	timeout := fs.Duration("timeout", 10*time.Minute, "how long to spend browsing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := applyScreen(opts, *screen); err != nil {
+		return err
+	}
+	if *list == "" {
+		return errors.New("warm: -pages is required. There is no built-in list: a history " +
+			"that looks ordinary depends on where this runs, and one baked into the binary " +
+			"would be the same history for every postern in the world")
+	}
+
+	pages, err := readPages(*list)
+	if err != nil {
+		return err
+	}
+
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, *timeout)
+	defer cancel()
+
+	b, closeBrowser, err := startBrowser(ctx, opts, display.Mode(*mode))
+	if err != nil {
+		return err
+	}
+	// Not deferred: the profile is only written when Chrome is closed, and an
+	// error return that skipped it would throw away the whole point of running.
+	err = b.Warm(ctx, pages, log)
+	closeBrowser()
+	if err != nil {
+		return err
+	}
+	log.Info("profile warmed", "profile", opts.UserDataDir)
+	return nil
+}
+
+// readPages reads the URL list, ignoring blanks and comments.
+func readPages(path string) ([]string, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("warm: read %s: %w", path, err)
+	}
+
+	var pages []string
+	for line := range strings.SplitSeq(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(line, "http://") && !strings.HasPrefix(line, "https://") {
+			return nil, fmt.Errorf("warm: %q is not an http url", line)
+		}
+		pages = append(pages, line)
+	}
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("warm: %s holds no urls", path)
+	}
+	return pages, nil
 }
 
 func runServe(args []string) error {
