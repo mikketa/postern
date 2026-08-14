@@ -154,6 +154,17 @@ const (
 	// while it is still being painted.
 	paintAttempts = 6
 
+	// maxBlankGrids is how many times to go back and look again at a panel that
+	// photographs as one flat colour before pressing reload and asking for
+	// another challenge.
+	//
+	// Going round again is worth doing rather than reloading straight away: a
+	// fresh round starts with the full wake — pointer travel and all — where the
+	// repaint loop inside a round only resizes, and measured runs recover on
+	// their own within a round or two. Reloading is the fallback, not the first
+	// move, because it costs a challenge.
+	maxBlankGrids = 3
+
 	// blankTilesPercent is how much of the grid has to be one flat colour for
 	// the whole thing to count as unpainted. Not all of it: a real grid can
 	// hold a tile of plain sky, and a grid still arriving usually has one or
@@ -184,6 +195,19 @@ const (
 
 // errPass is that refusal, travelling back up to the round loop.
 var errPass = errors.New("challenge: solver passed")
+
+// errBlank says the grid never painted: the panel is where it should be and the
+// document describes a grid of the right shape, but the pixels in it are one
+// flat colour.
+//
+// This is worth its own error because of what used to happen instead. A blank
+// photograph is a photograph the solver can answer — it finds nothing in it,
+// which is a legal answer, so postern ticked nothing and pressed verify. That
+// submits an empty answer to a grid nobody looked at, reCAPTCHA refuses it, and
+// the next grid arrives just as unpainted. Measured over two runs on the demo
+// page: 8 of 11 rounds under headless Chrome and 5 of 13 under a virtual
+// display were photographs of nothing, each one costing a round and a refusal.
+var errBlank = errors.New("challenge: the grid never painted")
 
 // Options is what to do with a picture challenge.
 type Options struct {
@@ -230,6 +254,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 	times := newTimings()
 	passes := 0
 	stuck := 0
+	blanks := 0
 	// rounds is how many grids this challenge took, which is the caller's
 	// only measure of how much reCAPTCHA is asking for.
 	rounds := 0
@@ -240,7 +265,12 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 	// fresh presses the reload button and insists on getting somewhere. A panel
 	// that keeps handing back the same grid is not going to be talked round,
 	// and every attempt costs a round trip to the solver.
-	fresh := func(before []string) error {
+	// why says what drove the reload, because the two reasons want different
+	// answers from whoever reads the failure: a solver that cannot do bicycles
+	// needs a model, a grid that never paints needs nothing of the sort. Sharing
+	// one message between them sent this author looking at the vision for an
+	// hour over a run whose panels were blank.
+	fresh := func(before []string, why string) error {
 		changed, err := reload(ctx, frame, before, times)
 		if err != nil {
 			return err
@@ -252,7 +282,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		stuck++
 		if stuck >= maxStuckReloads {
 			return fmt.Errorf("challenge: asked %d times for a grid other than %q and got "+
-				"the same one back, which the solver has nothing for", stuck, frame.View.Prompt)
+				"the same one back — %s", stuck, frame.View.Prompt, why)
 		}
 		log.Info("the panel kept the same grid", "attempts", stuck)
 		return nil
@@ -283,6 +313,25 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			"notice", frame.View.Notice)
 
 		points, saved, err := inspect(ctx, frame, opts, times, log)
+		if errors.Is(err, errBlank) {
+			// Not a round. Nothing was photographed, nothing was answered and
+			// nothing was submitted, so charging it against the six a challenge
+			// gets would spend the budget on grids nobody saw.
+			blanks++
+			rounds = round
+			log.Info("the grid never painted, looking again", "attempt", blanks)
+			if blanks >= maxBlankGrids {
+				blanks = 0
+				if err := fresh(before, "the grid never painted, so nothing here "+
+					"was ever seen"); err != nil {
+					return rounds, err
+				}
+				continue
+			}
+			round--
+			continue
+		}
+		blanks = 0
 		if errors.Is(err, errPass) {
 			// Reloading asks for a different challenge, but reCAPTCHA is under
 			// no obligation to change the subject and often does not: it has
@@ -297,7 +346,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			}
 
 			log.Info("solver passed, asking for another challenge", "passes", passes)
-			if reloadErr := fresh(before); reloadErr != nil {
+			if reloadErr := fresh(before, "which the solver has nothing for"); reloadErr != nil {
 				return rounds, reloadErr
 			}
 			continue
@@ -371,7 +420,8 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		if clicked == 0 && frame.View.Notice != "" {
 			log.Info("nothing new on a grid already refused, asking for another",
 				"notice", frame.View.Notice, "named", len(points))
-			if err := fresh(before); err != nil {
+			if err := fresh(before, "and the panel had already refused this "+
+				"answer"); err != nil {
 				return rounds, err
 			}
 			continue
@@ -535,6 +585,14 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		if steady && !blank(shot, frame.View.Tiles) {
 			break
 		}
+	}
+
+	// Out of attempts and still one flat colour. The document says there is a
+	// grid here, so this is not a challenge that has ended — it is a picture of
+	// nothing, and the one thing not to do with it is treat the solver finding
+	// nothing in it as an answer.
+	if blank(shot, frame.View.Tiles) {
+		return nil, "", errBlank
 	}
 
 	saved := ""
