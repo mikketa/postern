@@ -74,6 +74,9 @@ against its bar of 0.40, and missed it every time. On a dynamic grid a miss is n
 answer, it is a failed one: the challenge comes back, and it comes back again. Thirteen
 rounds is what a solver that misses one square looks like from the outside.
 
+That crossing is now scored 0.58. What changed was not the corpus — see below for the
+measurement that ruled it out — but which export of the encoder the head reads against.
+
 So the round count is a symptom, not a verdict, and it does not separate the two causes.
 Both produce it. What can be said is narrower: a run that answers everything finishes in six
 rounds and tends to get a token, and everything else — worn address, worn profile, a category
@@ -430,6 +433,37 @@ simply low. A head whose hash does not match the installed encoder is now ignore
 with the command to refit it. `examples/probe-crosswalk.json` is that head, fitted against
 what `install-vision.sh` installs, and the script installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
+
+**More tiles was the wrong answer, and the corpus said so.** The obvious way to fix a head
+that misses a plain crossing is to label more grids. Measured before doing it: fit on 4, 6,
+8, 10 and 12 grids, score each by leaving one grid out, and the mistakes per grid go 1.19,
+0.67, 0.47, 0.34, 0.33. Flat from nine. The last three grids collected and labelled bought
+nothing, and thirty more from the same stream would be thirty more of the same urban street
+corners.
+
+Two other things were tried and are written down because they failed. Reading each tile
+with its neighbours — the nine tiles are one photograph cut up, so a crossing is a
+whole-panel object and the stripes carry on into the next square — scored 22 mistakes on
+its own and 5 alongside the tile, against 4 for the tile alone. Blending the fitted head
+back towards CLIP's text direction for "a photo of a crosswalk", which is the standard fix
+for an over-specialised probe, did work: 3 mistakes across a broad basin of mixes from 0.3
+to 0.7, and it is a basin rather than a spike, so it is real.
+
+What it is not is additive. The **full-precision export of the same encoder** gets the same
+3 mistakes and the same 10 grids of 12 answered exactly, with no blend, no extra knob and
+nothing to calibrate — and the tile it stops missing is the one that has no excuse, a
+crossing painted across a whole carriageway, 0.30 before and 0.58 after. Stacking the blend
+on top of it makes it worse again. So the head reads against `clip-vision-fp32.onnx` and
+nothing else does.
+
+That last part is deliberate. The full-precision file is 345MB against 84MB, and half a
+second a grid against a fifth of one — 161ms to load and 347ms for nine tiles quantised,
+475ms and 550ms full-precision, which is 2.6s across a five-round challenge and not worth
+arguing about. What would be worth arguing about is swapping it in everywhere: the
+zero-shot path's thresholds were calibrated against the quantised export, and moving the
+encoder under them changes every one of those numbers silently. So a head now names its
+encoder *file* as well as its hash, `install-vision.sh` fetches what the installed heads
+ask for, and a grid pays for the larger encoder only when it reaches a head at all.
 
 That is the honest state of it: a category with a head is answered well, a category
 without one is answered by CLIP and often wrong. The path from the second to the first is
