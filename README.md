@@ -88,6 +88,31 @@ flag, which also keeps them out of a world-readable `/proc`, and signs in over C
 This is plumbing, not a result: it is measured against a proxy that demands a password,
 not against a claim about what any particular exit address is worth to Google.
 
+The other half of reputation is the browser itself, and postern keeps a profile across runs
+for it. Two things were wrong with that. Chrome was **killed rather than closed** — the
+context was cancelled, which ends the process — so it never wrote `Default/Preferences`,
+where a profile's settled state lives. Measured two runs each way: absent every time from a
+killed browser, present every time from a closed one. And the profile had never been
+anywhere, because nothing ever took it browsing. `postern warm` does:
+
+```sh
+postern warm -pages sites.txt          # one url per line, # comments ignored
+```
+
+It visits each page once, in a random order, scrolls it twice and stays a few seconds —
+real pages fetched, real cookies set by the sites that set them, real history written. It
+ships with **no built-in list**: a history that looks ordinary depends on where the solver
+runs, and a list baked into the binary would be the same history for every copy of postern
+in the world, which is a signal rather than the absence of one. Warming is its own command
+because it belongs on a schedule, not in front of every token.
+
+What that is worth is **not established**. Interleaved over four runs each, a warmed profile
+and a fresh one were both served a picture challenge every single time — no difference at
+all. That measurement was taken from an address that had already run dozens of solves that
+day, where every arm is at the floor, so it says nothing about a warm profile on a clean
+address. What can be said is narrower and worth saying anyway: the profile now keeps what a
+profile is supposed to keep, which it demonstrably did not before.
+
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
 ## How it works
@@ -108,7 +133,9 @@ Four decisions carry the whole thing.
 
 **The browser is genuine.** Not a spoofed user agent, not a patched headless build — the
 real binary, launched with `--disable-blink-features=AutomationControlled` and without
-the automation banner, reusing the same profile every run so it ages like a person's.
+the automation banner, reusing the same profile every run so it ages like a person's —
+closed properly on the way out, and taken browsing by `postern warm`, without which
+"ageing" was a word rather than a fact.
 
 **It is windowed, not headless.** This is the one that mattered most, and it came from a
 measurement. Against a production Turnstile sitekey, headless Chrome was refused **six
