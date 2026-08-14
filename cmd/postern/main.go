@@ -163,7 +163,14 @@ func buildFleet(path, pagesPath string, opts browser.Options, log *slog.Logger) 
 			Profile: filepath.Join(base, "fleet", fields[0]),
 		}
 		if len(fields) == 2 {
-			identity.Proxy = fields[1]
+			// Taken in the form providers sell it, not just as a URL; see
+			// pool.ParseProxy. A mistyped one is refused here rather than
+			// becoming an identity that quarantines itself for no reason.
+			proxy, err := pool.ParseProxy(fields[1])
+			if err != nil {
+				return nil, fmt.Errorf("serve: %s: %w", path, err)
+			}
+			identity.Proxy = proxy
 		}
 		identities = append(identities, identity)
 	}
@@ -176,6 +183,14 @@ func buildFleet(path, pagesPath string, opts browser.Options, log *slog.Logger) 
 		if pages, err = readPages(pagesPath); err != nil {
 			return nil, err
 		}
+	}
+
+	// Said once, at startup, rather than discovered in a month of flat token
+	// rates. Not fatal: a fleet sharing one address is a legitimate thing to
+	// run while proxies are still being sorted out, as long as nobody is under
+	// the impression it is doing more than that.
+	for _, problem := range pool.CheckFleet(identities) {
+		log.Warn("fleet", "problem", problem)
 	}
 
 	p, err := pool.New(identities, filepath.Join(base, "fleet", "state.json"), pool.Settings{})
