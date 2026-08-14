@@ -575,24 +575,23 @@ def main() -> int:
 
 
 
-def encoder_fingerprint() -> str:
-    """What the installed picture encoder is, as a number a head can name.
+def encoder_fingerprint(name: str = "clip-vision.onnx") -> str:
+    """What an installed picture encoder is, as a number a head can name.
 
     The file itself, hashed. Version strings and model names are not enough:
     the quantised and unquantised exports of one model share both, and so do
     two exports made by different tools from the same weights.
     """
-    global _fingerprint
-    if _fingerprint is None:
+    if name not in _fingerprints:
         digest = hashlib.sha256()
-        with open(os.path.join(directory(), "clip-vision.onnx"), "rb") as handle:
+        with open(os.path.join(directory(), name), "rb") as handle:
             for block in iter(lambda: handle.read(1 << 20), b""):
                 digest.update(block)
-        _fingerprint = digest.hexdigest()
-    return _fingerprint
+        _fingerprints[name] = digest.hexdigest()
+    return _fingerprints[name]
 
 
-_fingerprint: str | None = None
+_fingerprints: dict[str, str] = {}
 
 
 def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
@@ -621,16 +620,30 @@ def probed(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
         # nothing, passed on every crosswalk grid, and two live runs died asking
         # for a category the solver was supposed to be able to answer. Nothing
         # in the output looked wrong; the scores were simply low.
+        # Which encoder, before whether it is the right one. A head may be
+        # fitted against an export nothing else here uses: the full-precision
+        # patch16 is worth a grid in twelve to this head — a wide, plainly
+        # painted crossing it otherwise scores at 0.30 against a bar of 0.33 —
+        # and is worth nothing measurable to the zero-shot path, whose
+        # thresholds are calibrated against the quantised one. So the head says
+        # what to load, and only the grids that reach a head pay for it.
+        wants = head.get("encoder_file", "clip-vision.onnx")
+        if not os.path.exists(os.path.join(directory(), wants)):
+            print(f"ignoring {os.path.basename(path)}: it was fitted against {wants}, "
+                  f"which is not installed. Re-run examples/install-vision.sh.",
+                  file=sys.stderr)
+            continue
+
         fitted = head.get("encoder")
-        if fitted and fitted != encoder_fingerprint():
+        if fitted and fitted != encoder_fingerprint(wants):
             print(f"ignoring {os.path.basename(path)}: fitted on a different export of "
-                  f"{head.get('model', 'clip')} ({fitted[:12]}, this one is "
-                  f"{encoder_fingerprint()[:12]}). Refit it with examples/train-probe.py "
+                  f"{head.get('model', 'clip')} ({fitted[:12]}, {wants} is "
+                  f"{encoder_fingerprint(wants)[:12]}). Refit it with examples/train-probe.py "
                   f"against the installed encoder.", file=sys.stderr)
             continue
 
         weights = np.asarray(head["weights"], dtype=np.float32)
-        embeds = embed_images(session("clip-vision.onnx"),
+        embeds = embed_images(session(wants),
                               [crop(panel, box, 0.0) for box in boxes])
         scores = 1.0 / (1.0 + np.exp(-(embeds @ weights + head["bias"])))
 
