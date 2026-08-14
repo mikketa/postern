@@ -367,14 +367,21 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
     --models ~/.cache/postern-vision --hold <a panel series to test on>
 ```
 
-**Most of those labels write themselves.** reCAPTCHA never says which square was wrong, but
-it does say whether a challenge was right — a token means every answer in it was accepted.
-So when a run with `-save-panels` produces a token, postern writes what it answered into
-`labels.json` beside the panels, in exactly the shape above; answers from a challenge that
-failed are dropped, since one wrong square fails the lot and there is no telling which. A
-fleet left running therefore builds its own training set, and the categories it can already
-answer pay for the ones it cannot. Labelling by eye is then for bootstrapping a category
-from nothing, not for every grid.
+**Half of those labels write themselves.** When a run with `-save-panels` produces a token,
+postern writes the squares it ticked into `answers.json` beside the panels, and
+`train-probe.py --answers` folds them in.
+
+Half, and not more, because of what a token actually vouches for. It grades the squares that
+were ticked — not the ones that were not. Measured on a live run: a bus challenge handed over
+a token with a school bus sitting unticked in square 7 of two consecutive rounds. Recording
+that grid as "no bus here" would teach a head that a school bus is not a bus, which is worse
+than having no data at all. So the file holds positives only and makes no claim about the
+rest, and a round where nothing was ticked is not recorded — it means the solver saw nothing,
+not that there was nothing.
+
+A fleet left running therefore accumulates confirmed examples of what things look like, and
+the categories it can already answer pay for the ones it cannot. Negatives still have to come
+from a person looking at a grid, which is what the by-eye labels above are for.
 
 Fitted on 21 tiles from 6 grids and measured on a three-round challenge from a later run
 that shared no tile with it: **one crossing missed, nothing ticked in excess** — the miss
