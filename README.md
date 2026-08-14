@@ -346,6 +346,15 @@ python examples/train-probe.py ~/panels labels.json crosswalk \
     --models ~/.cache/postern-vision --hold <a panel series to test on>
 ```
 
+**Most of those labels write themselves.** reCAPTCHA never says which square was wrong, but
+it does say whether a challenge was right — a token means every answer in it was accepted.
+So when a run with `-save-panels` produces a token, postern writes what it answered into
+`labels.json` beside the panels, in exactly the shape above; answers from a challenge that
+failed are dropped, since one wrong square fails the lot and there is no telling which. A
+fleet left running therefore builds its own training set, and the categories it can already
+answer pay for the ones it cannot. Labelling by eye is then for bootstrapping a category
+from nothing, not for every grid.
+
 Fitted on 21 tiles from 6 grids and measured on a three-round challenge from a later run
 that shared no tile with it: **one crossing missed, nothing ticked in excess** — the miss
 was a crossing half hidden behind a market stall — against roughly 4 in excess per grid for
