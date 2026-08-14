@@ -8,10 +8,13 @@ package solver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -188,6 +191,10 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	panels := challenge.NewFinder()
 
 	clicks := 0
+	// answers is what the solver said about each saved grid, kept until the
+	// challenge ends. Only a run that produces a token gets to keep them: see
+	// recordAnswers.
+	answers := map[string][]int{}
 	attempts := 0
 	// Whether the vendor ever rendered its own frame. A widget that solves
 	// itself never needs to, so this is not a failure on its own — but at the
@@ -247,6 +254,14 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			if s.Token != "" {
 				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
 					"challenges", attempts)
+				// The token is the grading. reCAPTCHA never says which square
+				// was wrong, but it does say whether the whole challenge was
+				// right, and a challenge that ends in a token is one where
+				// every answer was — so these can be written down as labels
+				// without anyone having to sit and click through the grids.
+				if err := recordAnswers(req.SavePanels, answers); err != nil {
+					log.Info("could not write labels", "err", err)
+				}
 				return &Result{Token: s.Token, Elapsed: time.Since(start)}, nil
 			}
 
@@ -268,6 +283,9 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					done, err := challenge.Solve(tabCtx, panel, challenge.Options{
 						Solver:     req.ImageSolver,
 						SavePanels: req.SavePanels,
+						OnAnswer: func(saved string, tiles []int) {
+							answers[saved] = tiles
+						},
 					}, log)
 					rounds += done
 					if errors.Is(err, context.DeadlineExceeded) {
@@ -504,3 +522,50 @@ const hostSetup = `
     'position:fixed;left:60px;top:50%;transform:translateY(-50%);z-index:999999';
   document.body.appendChild(host);
 `
+
+// recordAnswers adds this run's answers to the label file beside the panels.
+//
+// Called only when a token was produced, which is what makes the labels worth
+// having: reCAPTCHA grades the challenge rather than the square, so a token
+// means every answer in it was accepted, and no answer from a challenge that
+// failed is worth keeping — one wrong square fails the lot, and there is no
+// telling which.
+//
+// The file is the same shape examples/train-probe.py reads, so a fleet left
+// running builds its own training set: the categories it can already answer
+// produce the labels for the categories it cannot.
+func recordAnswers(dir string, answers map[string][]int) error {
+	if dir == "" || len(answers) == 0 {
+		return nil
+	}
+
+	path := filepath.Join(dir, "labels.json")
+	labels := map[string][]int{}
+	if body, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(body, &labels); err != nil {
+			return fmt.Errorf("solver: %s is not readable: %w", path, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	for panel, tiles := range answers {
+		// An empty answer is an answer: "none of these are buses" is exactly
+		// what a dynamic grid ends on, and a grid labelled with no positives is
+		// as useful to fit against as one full of them.
+		if tiles == nil {
+			tiles = []int{}
+		}
+		labels[panel] = tiles
+	}
+
+	body, err := json.MarshalIndent(labels, "", " ")
+	if err != nil {
+		return err
+	}
+	temp := path + ".tmp"
+	if err := os.WriteFile(temp, body, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(temp, path)
+}

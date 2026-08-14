@@ -364,8 +364,12 @@ func TestKeepWritesAPanelAndItsGeometry(t *testing.T) {
 		},
 	}
 
-	if err := keep(dir, []byte("a png, as far as this is concerned"), view); err != nil {
+	stem, err := keep(dir, []byte("a png, as far as this is concerned"), view)
+	if err != nil {
 		t.Fatalf("keep: %v", err)
+	}
+	if stem == "" || filepath.Ext(stem) != "" {
+		t.Fatalf("keep returned %q, want a bare name to label the panel by", stem)
 	}
 
 	written, err := os.ReadDir(dir)

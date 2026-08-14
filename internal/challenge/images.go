@@ -197,6 +197,18 @@ type Options struct {
 	// fit a head for a category no model has a class for. See
 	// examples/train-probe.py.
 	SavePanels string
+
+	// OnAnswer, when set, is told what the solver said about each saved panel:
+	// the file it was saved as, and which squares were named.
+	//
+	// This is what makes a corpus label itself. reCAPTCHA grades a whole
+	// challenge, not a square — but a challenge that ends in a token is a
+	// challenge every answer in which was right, so the caller that sees the
+	// token can turn these into labels no one had to sit and click through.
+	// Answers from a challenge that never produced a token are worth nothing
+	// and must be dropped, which is why this hands them over rather than
+	// writing them: only the caller knows how it ended.
+	OnAnswer func(panel string, tiles []int)
 }
 
 // Solve captures the panel, asks the external solver what to click, clicks it,
@@ -270,7 +282,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			"grid", frame.View.Columns(),
 			"notice", frame.View.Notice)
 
-		points, err := inspect(ctx, frame, opts, times, log)
+		points, saved, err := inspect(ctx, frame, opts, times, log)
 		if errors.Is(err, errPass) {
 			// Reloading asks for a different challenge, but reCAPTCHA is under
 			// no obligation to change the subject and often does not: it has
@@ -333,6 +345,14 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		}
 		if clicked < len(points) {
 			log.Info("kept tiles the solver named again", "clicked", clicked, "named", len(points))
+		}
+
+		// What the solver said about this grid, in squares rather than pixels,
+		// for whoever finds out how the challenge ended. Named tiles, not
+		// clicked ones: a square the solver named and found already ticked is
+		// still its answer.
+		if opts.OnAnswer != nil && saved != "" {
+			opts.OnAnswer(saved, squares(frame.View, points))
 		}
 
 		// An empty answer is an answer, not a failure: reCAPTCHA's own
@@ -434,7 +454,7 @@ func ready(ctx context.Context, frame *Frame) error {
 // photograph shows that it was taken mid-fade. Two do — a fading grid changes
 // between them and a finished one does not — so this takes photographs until
 // two in a row agree.
-func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, log *slog.Logger) ([]point, error) {
+func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, log *slog.Logger) ([]point, string, error) {
 	// Get the page painted before the first photograph too. The panel fades in
 	// over the page, and under a virtual display that fade stops wherever it was
 	// when the last frame was composited — measured, the opening grid of every
@@ -449,13 +469,13 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	err := stir(ctx, frame, true, times)
 	stop()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if err := frame.Reread(ctx); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !frame.Open() {
-		return nil, nil
+		return nil, "", nil
 	}
 
 	started := time.Now()
@@ -463,7 +483,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	shot, err := capture(ctx, frame)
 	stop()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	log.Debug("grid photographed", "attempt", 0, "took", time.Since(started))
 
@@ -477,13 +497,13 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		}
 		stop()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if err := frame.Reread(ctx); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if !frame.Open() {
-			return nil, nil
+			return nil, "", nil
 		}
 
 		started := time.Now()
@@ -505,7 +525,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 
 		steady := settled(shot, again, frame.View.Tiles)
@@ -517,35 +537,38 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		}
 	}
 
+	saved := ""
 	if opts.SavePanels != "" {
-		if err := keep(opts.SavePanels, shot, frame.View); err != nil {
+		var err error
+		if saved, err = keep(opts.SavePanels, shot, frame.View); err != nil {
 			// Worth saying, not worth abandoning a challenge over.
-			return nil, fmt.Errorf("challenge: saving the panel: %w", err)
+			return nil, "", fmt.Errorf("challenge: saving the panel: %w", err)
 		}
 	}
 
 	path, cleanup, err := writeTemp(shot)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer cleanup()
 
 	defer times.track("the solver")()
-	return ask(ctx, opts.Solver, path, frame.View)
+	points, err := ask(ctx, opts.Solver, path, frame.View)
+	return points, saved, err
 }
 
 // keep writes the grid and what postern read off it, for calibrating a solver
 // later against grids that cost nothing to replay.
-func keep(dir string, shot []byte, view View) error {
+func keep(dir string, shot []byte, view View) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		return "", err
 	}
 
 	// Named for when it was taken, so a directory sorts into the order the
 	// challenges were served.
 	stem := filepath.Join(dir, strconv.FormatInt(time.Now().UnixNano(), 10))
 	if err := os.WriteFile(stem+".png", shot, 0o644); err != nil {
-		return err
+		return "", err
 	}
 
 	meta, err := json.Marshal(struct {
@@ -554,9 +577,12 @@ func keep(dir string, shot []byte, view View) error {
 		Tiles   string `json:"tiles"`
 	}{view.Prompt, strconv.Itoa(view.Columns()), encodeTiles(view.Tiles)})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return os.WriteFile(stem+".json", meta, 0o644)
+	if err := os.WriteFile(stem+".json", meta, 0o644); err != nil {
+		return "", err
+	}
+	return filepath.Base(stem), nil
 }
 
 // reload asks the widget for a different challenge, for when the solver has
@@ -615,6 +641,22 @@ func await(ctx context.Context, frame *Frame, before []string, budget time.Durat
 	}
 	times.mark("waits given up on")
 	return false, nil
+}
+
+// squares turns the solver's coordinates into tile numbers, which is what a
+// label file is written in — a pixel is meaningless once the panel has moved.
+func squares(view View, points []point) []int {
+	var tiles []int
+	for _, p := range points {
+		for i, tile := range view.Tiles {
+			if p.X >= tile.X && p.X <= tile.X+tile.W &&
+				p.Y >= tile.Y && p.Y <= tile.Y+tile.H {
+				tiles = append(tiles, i)
+				break
+			}
+		}
+	}
+	return tiles
 }
 
 // changed reports whether the grid is showing anything new.
