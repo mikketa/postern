@@ -254,11 +254,13 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			if s.Token != "" {
 				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
 					"challenges", attempts)
-				// The token is the grading. reCAPTCHA never says which square
-				// was wrong, but it does say whether the whole challenge was
-				// right, and a challenge that ends in a token is one where
-				// every answer was — so these can be written down as labels
-				// without anyone having to sit and click through the grids.
+				// The token grades what was ticked, and only that. Measured on
+				// a live run: a bus challenge produced a token with a school
+				// bus sitting unticked in square 7 of two rounds, so reCAPTCHA
+				// accepts an incomplete answer often enough to matter. Ticked
+				// and accepted is therefore solid; not ticked means nothing at
+				// all, and writing it down as "no bus here" would teach a head
+				// that a school bus is not a bus. See recordAnswers.
 				if err := recordAnswers(req.SavePanels, answers); err != nil {
 					log.Info("could not write labels", "err", err)
 				}
@@ -523,23 +525,29 @@ const hostSetup = `
   document.body.appendChild(host);
 `
 
-// recordAnswers adds this run's answers to the label file beside the panels.
+// recordAnswers adds this run's accepted answers to answers.json beside the
+// panels.
 //
-// Called only when a token was produced, which is what makes the labels worth
-// having: reCAPTCHA grades the challenge rather than the square, so a token
-// means every answer in it was accepted, and no answer from a challenge that
-// failed is worth keeping — one wrong square fails the lot, and there is no
-// telling which.
+// Deliberately not labels.json, and the difference is the whole point. A label
+// file says what is in every square: the ones listed hold the thing and the
+// rest do not. This file cannot say that. It is written only when a token was
+// produced, so every square in it was ticked and accepted — but reCAPTCHA hands
+// over tokens for incomplete answers, measured on a live run where a school bus
+// sat unticked through two rounds of a bus challenge that passed. Treating the
+// squares it does not mention as empty would be teaching a head the opposite of
+// the truth.
 //
-// The file is the same shape examples/train-probe.py reads, so a fleet left
-// running builds its own training set: the categories it can already answer
-// produce the labels for the categories it cannot.
+// So: positives only, and no claim about anything else. examples/train-probe.py
+// takes it with --answers, which adds the positives without inventing the
+// negatives. A fleet left running still builds its own training set that way —
+// the categories it can already answer pay for the ones it cannot — it is just
+// a set of one-sided examples rather than a labelled corpus.
 func recordAnswers(dir string, answers map[string][]int) error {
 	if dir == "" || len(answers) == 0 {
 		return nil
 	}
 
-	path := filepath.Join(dir, "labels.json")
+	path := filepath.Join(dir, "answers.json")
 	labels := map[string][]int{}
 	if body, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(body, &labels); err != nil {
@@ -550,13 +558,16 @@ func recordAnswers(dir string, answers map[string][]int) error {
 	}
 
 	for panel, tiles := range answers {
-		// An empty answer is an answer: "none of these are buses" is exactly
-		// what a dynamic grid ends on, and a grid labelled with no positives is
-		// as useful to fit against as one full of them.
-		if tiles == nil {
-			tiles = []int{}
+		// A round where nothing was ticked carries no information here: it
+		// says the solver saw nothing, not that there was nothing. Only a
+		// hand-checked label can say that, so it is left out entirely.
+		if len(tiles) == 0 {
+			continue
 		}
 		labels[panel] = tiles
+	}
+	if len(labels) == 0 {
+		return nil
 	}
 
 	body, err := json.MarshalIndent(labels, "", " ")

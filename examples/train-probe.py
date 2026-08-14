@@ -172,6 +172,52 @@ def read(panels, labels, vision, augment=True, seen=None):
     return np.concatenate(embeds), np.array(wanted), np.array(source)
 
 
+def read_positives(panels, positives, vision, seen=None):
+    """The ticked-and-accepted squares only, with no negatives invented.
+
+    Same reading as read(), minus every tile the answer did not name. A head
+    fitted on positives alone would be useless — it needs negatives to have
+    anything to separate — so this is meant to be added to hand-labelled grids,
+    not used on its own.
+    """
+    embeds, wanted, source = [], [], []
+    if seen is None:
+        seen = set()
+    for stem, tiles in positives.items():
+        shot = os.path.join(panels, stem + ".png")
+        meta_path = os.path.join(panels, stem + ".json")
+        if not os.path.exists(shot) or not os.path.exists(meta_path):
+            continue
+
+        with open(meta_path) as handle:
+            meta = json.load(handle)
+        boxes = [tuple(int(v) for v in part.split(",")) for part in meta["tiles"].split(";")]
+
+        panel = Image.open(shot).convert("RGB")
+        crops = []
+        for i in sorted(tiles):
+            if i >= len(boxes):
+                continue
+            x, y, w, h = boxes[i]
+            crop = panel.crop((x, y, x + w, y + h))
+            already = hashlib.sha1(crop.tobytes()).hexdigest()
+            if already in seen:
+                continue
+            seen.add(already)
+            crops.append(crop)
+        if not crops:
+            continue
+
+        for images in (crops, [c.transpose(Image.FLIP_LEFT_RIGHT) for c in crops]):
+            embeds.append(encode(vision, images))
+            wanted += [1.0] * len(images)
+            source += [stem] * len(images)
+
+    if not embeds:
+        return None
+    return np.concatenate(embeds), np.array(wanted), np.array(source)
+
+
 def fit(embeds, wanted):
     weights = np.zeros(embeds.shape[1])
     bias = 0.0
@@ -250,10 +296,23 @@ def main():
     parser.add_argument("--model", default="patch16", help="which encoder that is")
     parser.add_argument("--hold", nargs="*", default=[],
                         help="panels to keep out of training and test on")
+    parser.add_argument("--answers", default="",
+                        help="answers.json written by postern: positives only, no negatives")
     args = parser.parse_args()
 
     with open(args.labels) as handle:
         labels = {str(k): set(v) for k, v in json.load(handle).items()}
+
+    # Answers are not labels and are not merged with them. postern writes them
+    # when a challenge produced a token, so every square listed was ticked and
+    # accepted — but reCAPTCHA hands out tokens for incomplete answers, measured
+    # on a live run where a school bus sat unticked through a bus challenge that
+    # passed. So the squares it does not mention are unknown, not empty, and
+    # only the positives are read.
+    positives = {}
+    if args.answers:
+        with open(args.answers) as handle:
+            positives = {str(k): set(v) for k, v in json.load(handle).items() if v}
 
     encoder = os.path.join(args.models, "clip-vision.onnx")
     options = ort.SessionOptions()
@@ -266,6 +325,13 @@ def main():
 
     seen = set()
     embeds, wanted, source = read(args.panels, training, vision, seen=seen)
+    if positives:
+        extra = read_positives(args.panels, positives, vision, seen=seen)
+        if extra is not None:
+            embeds = np.concatenate([embeds, extra[0]])
+            wanted = np.concatenate([wanted, extra[1]])
+            source = np.concatenate([source, extra[2]])
+            print(f"plus {int(extra[1].sum())} squares postern was told it got right")
     print(f"fitting on {int(wanted.sum())} tiles that hold it, {len(wanted)} in all")
     weights, bias = fit(embeds, wanted)
     bar = calibrate(embeds, wanted, source)

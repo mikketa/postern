@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// A label file is only worth what the grading behind it is worth. reCAPTCHA
-// grades the whole challenge, so a token means every answer was accepted and a
-// failure means at least one was wrong with no way to tell which — which is why
-// only the success path calls this.
-func TestAnswersAreWrittenAsLabels(t *testing.T) {
+// What is recorded is only worth what the grading behind it is worth. A token
+// grades the squares that were ticked; it says nothing about the rest, since
+// reCAPTCHA passes incomplete answers — so this file holds positives and
+// nothing else.
+func TestAcceptedAnswersAreRecorded(t *testing.T) {
 	dir := t.TempDir()
 
 	if err := recordAnswers(dir, map[string][]int{"1786": {1, 4}}); err != nil {
@@ -19,11 +19,17 @@ func TestAnswersAreWrittenAsLabels(t *testing.T) {
 	}
 	// A second challenge adds to the file rather than replacing it: a fleet
 	// left running should accumulate a corpus, not keep overwriting one.
-	if err := recordAnswers(dir, map[string][]int{"1787": nil}); err != nil {
+	if err := recordAnswers(dir, map[string][]int{"1787": {2}}); err != nil {
 		t.Fatalf("record again: %v", err)
 	}
+	// A round where nothing was ticked says the solver saw nothing, not that
+	// the grid held nothing. Recording it as an empty answer would be a claim
+	// the token does not support.
+	if err := recordAnswers(dir, map[string][]int{"1788": nil}); err != nil {
+		t.Fatalf("record empty: %v", err)
+	}
 
-	body, err := os.ReadFile(filepath.Join(dir, "labels.json"))
+	body, err := os.ReadFile(filepath.Join(dir, "answers.json"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -38,10 +44,8 @@ func TestAnswersAreWrittenAsLabels(t *testing.T) {
 	if got := labels["1786"]; len(got) != 2 || got[0] != 1 || got[1] != 4 {
 		t.Fatalf("panel 1786 is labelled %v, want [1 4]", got)
 	}
-	// "none of these" is a real answer and has to survive the round trip as an
-	// empty list rather than a missing entry.
-	if got, ok := labels["1787"]; !ok || len(got) != 0 {
-		t.Fatalf("an empty answer came back as %v, ok=%v", got, ok)
+	if _, ok := labels["1788"]; ok {
+		t.Fatal("a round with nothing ticked was recorded as if it held nothing")
 	}
 }
 
