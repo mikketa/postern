@@ -42,7 +42,11 @@ challenge in about nine seconds rather than burning the timeout.
 Read those three rows together, because they are the honest shape of this. They fell from
 3/5 to 0/5 over an evening of testing from one home connection — and the builds in between
 differed only by fixes that should have helped, every one of them verified separately.
-Success here is mostly not about the solver.
+
+Address and profile moved together across those runs, so that fall does not establish which
+of them did it, and a later check found a third candidate: on the runs that failed longest,
+the vision was demonstrably missing squares. Weigh the reputation section below with that in
+mind — it is a real effect, and it is not the only one.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
@@ -60,8 +64,20 @@ loop — twenty runs separate perfectly:
 | 2, 3, 4, 5, 8, 11, 13, 15, 17, 19, 20 | none, 0 out of 13 |
 
 Every token came from a run that finished in exactly one or two full passes. Not one came
-from a run that took some other number of rounds, which is not what "the model was right
-more often" looks like — it is what a decision made before the pictures looked like.
+from a run that took some other number of rounds.
+
+That was read here, for a while, as a decision taken before the pictures — the grid as
+theatre. A later run says otherwise, and says it with the panels saved. A thirteen-round run
+that produced nothing was served three crosswalk grids; on all three the head scored the
+plainest crossing in the grid — full-width white bars across the road — at 0.30 to 0.34
+against its bar of 0.40, and missed it every time. On a dynamic grid a miss is not a partial
+answer, it is a failed one: the challenge comes back, and it comes back again. Thirteen
+rounds is what a solver that misses one square looks like from the outside.
+
+So the round count is a symptom, not a verdict, and it does not separate the two causes.
+Both produce it. What can be said is narrower: a run that answers everything finishes in six
+rounds and tends to get a token, and everything else — worn address, worn profile, a category
+the vision cannot do — arrives as more rounds.
 
 This is also why campaigns run back to back are not comparable. After an hour of solving
 from one address, the same build is served more rounds than it was at the start. Comparing
