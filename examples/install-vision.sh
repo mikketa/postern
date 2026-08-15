@@ -104,13 +104,14 @@ fetch https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/m
 # and 20 is 640/32) whatever it is given. Marking the outer axes dynamic does not
 # reach constants inside, and since it works perfectly at 640 nobody noticed.
 #
-# The solver copes by laying a tile on a 640 field rather than stretching it to
-# fill one, which is most of the difference. Exporting the model yourself is the
-# rest of it. Measured over the 48-grid bench, same solver, same everything else:
+# The solver copes by laying a tile on a field rather than stretching it to fill
+# one, which is most of the difference. Exporting the model yourself is the rest
+# of it: it lets the field be 288 pixels rather than 640, which is a three-fold
+# enlargement of a 96px tile instead of a seven-fold one. Measured over the
+# 48-grid bench, same solver, same everything else:
 #
-#     published build, tile stretched to 640     21/48 grids exact
-#     published build, tile laid on the field    29/48
-#     re-exported, tile laid on a 224 field      35/48
+#     published build, stuck at a 640 field      36/48 grids exact
+#     re-exported, tile laid on a 288 field      43/48
 #
 # It is 165MB against 44MB, unquantised, and about 180MB of PyTorch to produce —
 # the CPU-only wheel, not the 2GB one with the CUDA libraries. Worth it if you
