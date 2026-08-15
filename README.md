@@ -29,8 +29,8 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token**, and postern now says why: the vendor never rendered its frame |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **3/5 tokens**, ~1m10s–1m40s, with `solver-vision.py` |
-| Same, with `solver-yolos.py` | 2/5, measured in the following hour |
+| **reCAPTCHA v2 checkbox**, image challenge served | **4/10 tokens**, 72–85s each, with `solver-vision.py` at 48/48 on the bench |
+| Same, an earlier build of the same solver | 3/5, then 2/5 with `solver-yolos.py` an hour later |
 | Same, after ~25 solves from one address | **0/5** — see reputation, below |
 
 The last three rows deserve the detail rather than a footnote. When Google decides you are
@@ -47,6 +47,18 @@ Address and profile moved together across those runs, so that fall does not esta
 of them did it, and a later check found a third candidate: on the runs that failed longest,
 the vision was demonstrably missing squares. Weigh the reputation section below with that in
 mind — it is a real effect, and it is not the only one.
+
+**With the vision at 48/48 on the bench, ten runs from that same address gave 4 tokens**, in
+72 to 85 seconds each; the six failures ran out the 2m30s timeout. The logs say what those
+six were and were not. In four of them Google never once said the answer was wrong — no
+"veuillez réessayer", no "select all matching images" — it simply kept serving grid after
+grid, eleven to fourteen of them, which is the treadmill an address gets when it is not
+trusted rather than a solver being marked wrong. The other two are worth more than that: one
+sat on the same noised grid of cars four times over, where the solver found nothing and
+neither did I; the other was refused on a 4x4 of a coach filling the middle of the frame,
+where the solver ticked two squares the bus only grazes at the bumper. That last one is a
+real disagreement about where an object stops, it is the same trade-off the bench measures,
+and the way to change it is on 48 grids rather than on the one that just failed.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
