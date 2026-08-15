@@ -755,6 +755,16 @@ and a grid answered over several rounds can outlast it. The page's own remedy is
 widget's "please try again", so that is what postern does now rather than reporting a
 failure the browser never hit.
 
+*Postern ran itself out of screens.* Every run gets an Xvfb of its own, and every run that
+reached its timeout killed it with SIGKILL — the default for a command bound to a cancelled
+context. An X server killed that way cannot remove its lock file, and postern read any lock
+file as a display in use, so each timed-out run cost a display number permanently. After an
+afternoon of measuring, sixty-four dead locks and `no display free between :99 and :162` on
+a machine with nothing running on any of them. Both halves are fixed: the server is asked
+before it is killed, so it clears up after itself, and a lock whose process is gone is
+removed rather than believed. The lesson generalises past X — a lock file is a claim about
+a process, and it is worth checking that the process is still there.
+
 *What is left really is the model.* Postern answers the challenge; something has to
 recognise a bicycle in a deliberately degraded 100-pixel photograph. Run with `-v` to see
 which prompt came up, what your solver made of it, and what the panel objected to.
