@@ -512,14 +512,37 @@ cosmetic: the reload path used to report every reload as "the solver has nothing
 which cost this author an hour of looking at a vision model over a run whose panels were
 blank.
 
-**The paint itself is still not fixed.** The standard flags for a window Chrome thinks
-nobody is watching — `--disable-backgrounding-occluded-windows`,
-`--disable-renderer-backgrounding`, `--disable-background-timer-throttling` — were tried and
-measured over eight runs alternating with and without, so that Google's mood drifting could
-not be read as an effect: 3, 7, 0, 6 unpainted grids with them and 7, 7, 7, 0 without. The
-spread between runs is larger than the difference between the arms. They are not carried,
-and the negative result is written into `browser.go` so the next person does not spend the
-evening rediscovering it.
+The standard flags for a window Chrome thinks nobody is watching —
+`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`,
+`--disable-background-timer-throttling` — were tried and measured over eight runs alternating
+with and without, so that Google's mood drifting could not be read as an effect: 3, 7, 0, 6
+unpainted grids with them and 7, 7, 7, 0 without. The spread between runs is larger than the
+difference between the arms. They are not carried, and the negative result is written into
+`browser.go` so the next person does not spend the evening rediscovering it.
+
+**What did fix it was giving up on the screen.** Every failure above is a failure of the
+same thing: postern was asking the compositor what the panel looked like, and under a
+virtual display the compositor is not postern's to command. But the pictures are in the
+document. Each tile is an `<img>` with a source and a rectangle, both of which are already
+read every round for the geometry — so the panel can be *drawn* rather than photographed:
+a canvas the size of the challenge document, each tile's image drawn at its own rectangle
+and clipped to it, read back as a PNG.
+
+A canvas is drawn by the renderer, so there is no compositor in the path and none of the
+three failures can occur. The clip is the challenge document's own viewport, which is
+exactly what the screenshot clipped to, so the tile boxes handed to the solver and the
+coordinates it answers with mean the same thing as before and nothing downstream changed.
+
+The one thing that could have sunk it is canvas tainting — a cross-origin picture makes
+`toDataURL` a security error. reCAPTCHA serves its payloads from the origin its own frame
+runs on, so it does not arise; the code returns an empty string rather than throwing if it
+ever does, and the screenshot path is still there underneath.
+
+Measured over five runs after the change: **zero unpainted grids and zero falls back to the
+screenshot**, against 3, 7, 0 and 6 unpainted before it. Drawing a panel costs 24ms. The
+machinery it replaces — waking the page, photographing it, photographing it again to find
+out whether the first one had finished, up to six times — was the largest phase of a round
+that did not involve the solver.
 
 *The verify button is often not where the browser says it is.* reCAPTCHA lays its panel
 out taller than the space it gives it, and the buttons end up below a container that clips
