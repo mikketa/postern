@@ -230,6 +230,12 @@ DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.05)
 # squares that are there and saves one that is not.
 DETECT_TILE_MARGIN = float(os.environ.get("POSTERN_DETECT_TILE_MARGIN") or 0.55)
 
+# How much two boxes have to share, as intersection over union, before they are
+# taken to be two views of one thing rather than two things. High, because the
+# views being merged are of the same object from frames at different scales, and
+# the whole point is to keep the tightest of them.
+DETECT_SAME_THING = float(os.environ.get("POSTERN_DETECT_SAME_THING") or 0.75)
+
 # A trained head, for the categories nothing off the shelf can answer.
 #
 # Crosswalks are the case that forced this. COCO has no class for one, ADE20K
@@ -829,7 +835,7 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
         frames.append((max(x0, sx - mx), max(y0, sy - my),
                        min(x1, sx + sw + mx), min(y1, sy + sh + my)))
 
-    covered: dict[int, float] = {}
+    found: list[tuple[float, float, float, float, float]] = []
     for fx0, fy0, fx1, fy1 in frames:
         scores, coords = run([panel.crop((int(fx0), int(fy0), int(fx1), int(fy1)))],
                              DETECT_GRID_SIZE)
@@ -846,11 +852,40 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
             print(f"found one at {left:.0f},{top:.0f} {right-left:.0f}x{bottom-top:.0f} "
                   f"({float(query.max()):.2f})", file=sys.stderr)
 
-            for index, (sx, sy, sw, sh) in enumerate(boxes):
-                overlap_x = max(0.0, min(sx + sw, right) - max(sx, left))
-                overlap_y = max(0.0, min(sy + sh, bottom) - max(sy, top))
-                share = overlap_x * overlap_y / (sw * sh)
-                covered[index] = max(covered.get(index, 0.0), share)
+            found.append((float(query.max()), left, top, right, bottom))
+
+    # Seventeen frames see the same objects, so one motorcycle comes back as a
+    # dozen boxes of varying looseness — and it is the loosest of them that
+    # reaches into a square the thing is not in. Keeping the best-scoring box of
+    # each cluster is what a detector already does within a single frame; doing
+    # it across frames is the same step, and without it this is the union of
+    # every frame's worst localisation rather than of its best.
+    #
+    # Measured over the 48-grid bench it is worth a whole grid — the square that
+    # went was one a tyre crossed by three pixels — and it behaves the way a
+    # threshold ought to: 0.35 and 0.45 give 43, 0.55 gives 44, 0.65 through 0.85
+    # give 45, and past 0.9 it suppresses nothing and comes back to 44, which is
+    # the score without it. Fitting the bar by leaving one grid out at a time
+    # gives 45 as well, so it is not the grid it fixes that is holding it up.
+    kept: list[tuple[float, float, float, float, float]] = []
+    for score, left, top, right, bottom in sorted(found, key=lambda box: -box[0]):
+        for _, other_left, other_top, other_right, other_bottom in kept:
+            across = max(0.0, min(right, other_right) - max(left, other_left))
+            down = max(0.0, min(bottom, other_bottom) - max(top, other_top))
+            both = (right - left) * (bottom - top) \
+                + (other_right - other_left) * (other_bottom - other_top) - across * down
+            if both > 0 and across * down / both >= DETECT_SAME_THING:
+                break
+        else:
+            kept.append((score, left, top, right, bottom))
+
+    covered: dict[int, float] = {}
+    for _, left, top, right, bottom in kept:
+        for index, (sx, sy, sw, sh) in enumerate(boxes):
+            overlap_x = max(0.0, min(sx + sw, right) - max(sx, left))
+            overlap_y = max(0.0, min(sy + sh, bottom) - max(sy, top))
+            share = overlap_x * overlap_y / (sw * sh)
+            covered[index] = max(covered.get(index, 0.0), share)
 
     chosen = {i for i, share in covered.items() if share >= DETECT_OVERLAP}
     for index in sorted(chosen):
