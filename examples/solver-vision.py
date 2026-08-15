@@ -285,6 +285,16 @@ SEGMENT_FLOOR = float(os.environ.get("POSTERN_SEGMENT_FLOOR") or 0.01)
 # And how much of the grid has to be the thing at all before any square counts.
 SEGMENT_PRESENT = float(os.environ.get("POSTERN_SEGMENT_PRESENT") or 0.03)
 
+# A 3x3 tile is a photograph of its own, so there is no most-covered square to
+# measure the others against and no grid-wide presence to check — only how much
+# of this one tile is the thing. The bar is far lower than the grid's for a
+# reason worth recording: over six labelled grids of bridges and hills, the
+# squares that wanted ticking came in from 0.001 to 0.15, and every square that
+# did not came in at exactly zero. There is no borderline case to split, so this
+# sits an order of magnitude below the lowest real one and well clear of a
+# handful of stray pixels.
+SEGMENT_TILE_FLOOR = float(os.environ.get("POSTERN_SEGMENT_TILE_FLOOR") or 0.001)
+
 # The segmentation model, looked for next to the CLIP one. Absent, the 4x4
 # path is simply not taken.
 SEGMENT_MODEL = "segment.onnx"
@@ -480,6 +490,12 @@ def solve(image_path: str) -> list[tuple[float, float]]:
     # POSTERN_CLIP_LAYOUT=occlusion opts in.
     cut_up = len(boxes) == 16 and os.environ.get("POSTERN_CLIP_LAYOUT") == "occlusion"
     chosen = occluded(panel, boxes, probability) if cut_up else scored(panel, boxes, probability)
+
+    # And, for the categories a pixel model knows, whatever it saw that CLIP did
+    # not. Only on a 3x3 — a 4x4 was answered by the mask above and never got
+    # here — and only ever adding: see segmented_tiles for why that is safe.
+    if len(boxes) != 16 and os.path.exists(os.path.join(directory(), SEGMENT_MODEL)):
+        chosen |= segmented_tiles(panel, boxes, wanted)
 
     hits = []
     for index in sorted(chosen):
@@ -853,6 +869,48 @@ def segmented(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
     chosen = {i for i, v in enumerate(share) if v >= max(SEGMENT_FLOOR, SEGMENT_SHARE * peak)}
     for i in sorted(chosen):
         print(f"tile {i}: {share[i]*100:.0f}% covered", file=sys.stderr)
+    return chosen
+
+
+def segmented_tiles(panel: Image.Image, boxes: list, wanted: tuple) -> set:
+    """The same question asked of a 3x3 grid, one photograph at a time.
+
+    Nine tiles are nine photographs, so there is no mask over the grid to read
+    squares off — each tile gets its own. This is not a substitute for scoring
+    them with CLIP; it is a second opinion, and the caller takes the union.
+
+    Which is safe because of how the two are wrong. CLIP scores a whole tile
+    against a sentence, so a motorway with an overpass in the distance reads as
+    a photograph of a motorway: measured over the ponts grid, the real
+    footbridge came to 0.30, below a tile with no bridge in it at 0.35, and no
+    threshold separates them. A model that labels pixels has no such problem —
+    it either finds bridge pixels or it does not. Over six labelled grids of
+    bridges and hills, 54 tiles, it found some in nine of the squares that
+    wanted them and in *none* of the squares that did not, with either model:
+    perfect precision, partial recall. Union with CLIP recovered three squares
+    and cost nothing, taking those grids from three exactly right to five.
+
+    The recall is the part that depends on the model. B0, which install-vision.sh
+    fetches by default, sees hills well and bridges not at all — every bridge
+    tile came back at zero. B4 sees both. Nothing breaks without it; the bridges
+    simply stay CLIP's problem.
+    """
+    classes = next((SEGMENT_CLASSES[name] for name in wanted if name in SEGMENT_CLASSES), None)
+    if classes is None:
+        return set()
+
+    model = session(SEGMENT_MODEL)
+    chosen = set()
+    for index, box in enumerate(boxes):
+        tile = crop(panel, box, 0.0).resize((SEGMENT_SIZE, SEGMENT_SIZE),
+                                            Image.Resampling.BICUBIC)
+        pixels = np.asarray(tile.convert("RGB"), dtype=np.float32) / 255.0
+        batch = ((pixels - SEGMENT_MEAN) / SEGMENT_STD).transpose(2, 0, 1)[None]
+        mask = model.run(None, {"pixel_values": batch})[0][0].argmax(0)
+        share = float(np.isin(mask, classes).mean())
+        if share >= SEGMENT_TILE_FLOOR:
+            print(f"tile {index}: {share*100:.1f}% of it is the thing", file=sys.stderr)
+            chosen.add(index)
     return chosen
 
 
