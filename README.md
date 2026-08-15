@@ -489,6 +489,38 @@ and the panel is measured again afterwards because it does not always come back 
 where it was. Ten grids out of ten came back clean after that, against one in six unusable
 before.
 
+That fixed the fade and did not fix the whole problem, which is worth saying plainly because
+the ten-out-of-ten above reads as though it did. A grid can also come back *entirely* flat —
+not a frozen fade but nothing at all, one white rectangle where the panel is, while the
+document lists nine tiles with exact geometry and every picture in them loaded and decoded.
+It arrives in runs, right after a round whose tiles were replaced, and the resize does not
+shift it: measured, three full rounds of waking the page — pointer travel included — left it
+white. Counted over four runs on the demo page, unpainted grids came out 3, 7, 0 and 6.
+
+What that used to cost was invisible. A blank photograph is one the solver can answer: it
+finds nothing, which is a legal answer to a dynamic grid, so postern ticked nothing and
+pressed verify — submitting an empty answer to a grid nobody had looked at. reCAPTCHA
+refuses it and serves another, just as unpainted. Two runs measured before this was found
+spent 8 rounds of 11 and 5 of 13 exactly that way, and both ended with no token and no
+indication of why.
+
+A grid that never painted is now its own outcome rather than an empty answer. It is not
+photographed to the solver, not submitted, and not charged against the six rounds a
+challenge gets — postern goes back and looks again, and after three of those asks for a
+different challenge and says which of the two reasons drove it there. That last part is not
+cosmetic: the reload path used to report every reload as "the solver has nothing for this",
+which cost this author an hour of looking at a vision model over a run whose panels were
+blank.
+
+**The paint itself is still not fixed.** The standard flags for a window Chrome thinks
+nobody is watching — `--disable-backgrounding-occluded-windows`,
+`--disable-renderer-backgrounding`, `--disable-background-timer-throttling` — were tried and
+measured over eight runs alternating with and without, so that Google's mood drifting could
+not be read as an effect: 3, 7, 0, 6 unpainted grids with them and 7, 7, 7, 0 without. The
+spread between runs is larger than the difference between the arms. They are not carried,
+and the negative result is written into `browser.go` so the next person does not spend the
+evening rediscovering it.
+
 *The verify button is often not where the browser says it is.* reCAPTCHA lays its panel
 out taller than the space it gives it, and the buttons end up below a container that clips
 them: `getBoundingClientRect` returns a perfectly plausible rectangle, nothing is painted
