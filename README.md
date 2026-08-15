@@ -458,10 +458,32 @@ cars, buses, hydrants, traffic lights, crosswalks, bridges, hills — in both 3x
 deduplicated on the pixels of the grid, since reCAPTCHA serves the same challenge over and
 over and a bench that counts one grid four times is reporting its own repetition.
 
-The current example solver scores **24 of 48 exactly, 25 squares missed and 8 in excess**.
-That the misses outnumber the excess three to one is the most useful thing on this page: it
-says the solver is not confused about what a bicycle is, it is failing to see them, which
-points at the detector's fixed-size build and its threshold rather than at the models.
+The first thing it reported was that misses outnumbered excess four to one — 33 squares
+missed against 8 over. That is not a solver confused about what a bicycle is; it is one
+failing to see them, and it pointed at how the pictures were being handed over rather than at
+the models. The detector only accepts 640x640, so a 96px tile asked on its own was stretched
+nearly seven times first. Measured on one bicycle in a dark porch, same model, same weights:
+
+| what the model was shown | scored |
+| --- | --- |
+| the tile stretched to 640 | 0.026 |
+| the tile laid on a 640 field at its own size | 0.234 |
+
+Laying the tile down instead of stretching it took the example solver from **21 of 48 grids
+exact to 29**, and the misses from 33 to 19. No new model, no download — the model was never
+blind, it was being handed a seven-fold enlargement of a thumbnail.
+
+Two things that looked promising and were not, both measured here rather than argued about:
+detecting on the whole 3x3 mosaic in one pass, which scores that same bicycle at 0.768 but
+finds nothing else on the grid and cost 10 grids; and moving the confidence threshold, whose
+curve is flat from 0.25 to 0.45 — the one grid between them is noise, so 0.35 stays.
+
+**A bench is only as honest as its labels.** Fifteen of these were inherited from an older
+corpus rather than written for this, and three of them were wrong: a grid holding three buses
+was recorded as holding none. They accounted for more than half the excess squares, and they
+made the solver look wrong where it had been right. Every label here has now been read off
+the picture with the square numbers drawn onto it — misreading which square is which is the
+one mistake that poisons a bench silently, and it had already happened once.
 
 **More tiles was the wrong answer, and the corpus said so.** The obvious way to fix a head
 that misses a plain crossing is to label more grids. Measured before doing it: fit on 4, 6,
