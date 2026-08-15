@@ -320,6 +320,21 @@ postern solve -kind recaptcha-v2 -url ... -sitekey ... \
     -image-solver ~/.cache/postern-vision/solve
 ```
 
+**Two of those models have to be built rather than downloaded**, and it is worth ten grids
+of the bench below — 38 of 48 against 48 of 48, same solver, same everything else. What the
+hub has is a detector that refuses any input but 640x640 (see below) and a segmenter one
+size down from the one this wants. `examples/export-models.py` builds both from the PyTorch
+weights, and the install script runs it when asked:
+
+```sh
+examples/install-vision.sh -export ~/.cache/postern-vision
+```
+
+That costs 430MB of models and a 1.4GB virtualenv of CPU-only PyTorch to produce them,
+which nothing needs afterwards — so it is a flag rather than the default, and the solver
+works without it. Re-running is free: each model is checked for what it must be able to do
+before anything is built.
+
 That script exists because "supply your own vision model" should be a line to copy, not an
 afternoon. It is still an example: a larger CLIP, a fine-tune on captcha tiles or a hosted
 model all plug into the same protocol, which is a PNG in and coordinates out.
@@ -364,11 +379,18 @@ is a good idea that measures badly: it can only find a square whose covering cha
 the picture is *of*, and half a bus does not, so it stops early and ticks 1.8 squares.
 `POSTERN_CLIP_LAYOUT=occlusion` still selects it.
 
-The segmentation model is optional. Without `segment.onnx` beside the CLIP files the 4x4
-path is not taken, and categories ADE20K does not have fall back to scoring squares, since
-a mask of nothing is not an answer. B0 is what `install-vision.sh` fetches, at 15MB; B4 is
-better (one tick in excess against five) but ships as PyTorch weights, and the conversion
-is written out in that script.
+**The 3x3 grids get the same question, one tile at a time.** A tile is a photograph of its
+own, so the mask is asked of each separately and any share of the class at all counts —
+these are the categories CLIP is worst at, and a bridge two hundred metres off is a handful
+of pixels. Over 54 tiles of bridges and hills it found the class in nine squares that hold
+one and in none that do not, which is what makes a floor that low safe.
+
+The segmentation model is optional. Without `segment.onnx` beside the CLIP files neither
+path is taken, and categories ADE20K does not have fall back to scoring squares, since a
+mask of nothing is not an answer. B0 is what `install-vision.sh` fetches without `-export`,
+at 15MB; B4 is better and is what `-export` builds — one tick in excess against five, and
+over those bridge and hill grids B0 found every hill and never once predicted the bridge
+class, which is in its vocabulary. On the bench that is one grid, 47 against 48.
 
 **When nothing off the shelf knows the word.** Crosswalks were 14% of the challenges
 served and no model answers them: COCO has no crosswalk, ADE20K has no crosswalk, an
@@ -497,6 +519,71 @@ was recorded as holding none. They accounted for more than half the excess squar
 made the solver look wrong where it had been right. Every label here has now been read off
 the picture with the square numbers drawn onto it — misreading which square is which is the
 one mistake that poisons a bench silently, and it had already happened once.
+
+Seven more of them were wrong, found by re-reading every grid the solver was scored wrong
+on before touching the solver. Two of those were the solver being right: a bike *rack*
+labelled as a bicycle, and a car read as a truck because noise at 96px made a hubcap look
+like a steel wheel. Three came from reading a tile at too small a magnification and saying
+so with more confidence than the pixels allowed — one of them read a van's rear bumper as a
+motorcycle's exhaust. Denoise before judging, and name the features that separate the two
+answers rather than the ones you expect to see.
+
+**48 of 48.** Everything below is against the labels as they now stand, with the models
+`-export` builds, so the rows differ by code alone. The first row is the same solver as the
+35/48 above, re-measured: the corrected labels and the two exported models are the whole
+difference between those two numbers, and neither is a change to the solver.
+
+| | grids exact | missed | in excess |
+| --- | --- | --- | --- |
+| where the four fixes above left it | 43/48 | 4 | 2 |
+| tile *and* grid laid on a 288px field | 45/48 | 3 | 0 |
+| segmentation asked tile by tile as well | 46/48 | 2 | 0 |
+| each 4x4 square read with its neighbours around it | 47/48 | 0 | 1 |
+| boxes merged across frames before reading squares | **48/48** | **0** | **0** |
+
+**288 rather than 224, and the curve is not smooth.** The backbone strides by 32, and a
+tile is laid in the *centre* of the field — so a field that is an odd multiple of 32 has a
+feature cell centred on it and an even multiple does not. 224, 288 and 352 win; 256, 320
+and 384 lose. 288 and 352 fail on exactly the same grids, so the choice does not rest on a
+borderline one.
+
+**Reading each 4x4 square with room around it** is what took misses to zero. A 4x4 is one
+photograph, and a bicycle half-hidden in a corner square is a fragment of a bicycle: shown
+that square plus half a square of its neighbours, with the whole field to itself, the
+detector finds it. That is seventeen passes per grid rather than one, and it brought back
+the same motorcycle under a dozen boxes — so they are merged the way a detector merges its
+own, greedily by overlap, before the squares are read off them. Without that the union is
+the *worst* localisation of each thing rather than the best, which put a sliver of tyre in
+a square no threshold could remove without taking a real square with it.
+
+**The head's own bar is worth the same last grid, independently.** Refit by the procedure
+in `train-probe.py` over 21 labelled crosswalk grids, it comes out at 0.36 in 18 folds of
+21; at the 0.32 it had before, the final solver ticks one square in excess and scores 47.
+An earlier attempt at exactly this number was rejected for good reason — it was being
+picked by hand against the bench, which is fitting the bench, not calibrating a head. What
+changed is who chooses the number, not the number.
+
+**Leave-one-grid-out is what separates an improvement from a memorisation.** Every change
+worth one grid was refit with the grid it fixes held out. Merging boxes across frames
+survives that (45/48 in cross-validation); a relative confidence bar that also scored one
+extra grid does not (44/48) — its whole case rested on the grid it repaired. Three knobs
+each worth exactly one grid were refused on that test: a hand-picked crosswalk bar, an
+overlap threshold of 0.03 sitting as an isolated point between two neighbours at 43, and a
+segmentation share of 0.08 with a window of 0.005 around it. The tie-break matters as much
+as the test: taking the smallest tied value systematically lands on the edge of a plateau,
+where the next grid's noise pushes it off. Take the middle.
+
+Measured and rejected, each because the number said so rather than because it sounded
+wrong: RT-DETR r101 in place of r50 (37/48 at every input size), a mirrored second pass
+(identical failures, twice the CPU), the full-precision encoder on the zero-shot path
+(41/48), dropping "truck" from what counts as a car (41/48), slicing 4x4 grids into
+overlapping tiles (43/48 at the middle of its plateau — the 44 and 45 readings were noise),
+rejecting boxes truncated at the field edge (no effect), refitting the crosswalk head on 12
+fresh grids and then on 21 (42/48, and it ticks the same disputed square — two heads fitted
+on disjoint data making the same mistake is not a data problem), OWLv2 for crosswalks (5 of
+9 grids against the head's 8), a stripe-periodicity feature, cropping to the road before
+scoring, arbitrating squares by segmentation pixels, and voting a square in only when
+several frames agree.
 
 **More tiles was the wrong answer, and the corpus said so.** The obvious way to fix a head
 that misses a plain crossing is to label more grids. Measured before doing it: fit on 4, 6,
