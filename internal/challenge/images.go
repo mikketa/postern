@@ -478,7 +478,13 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 // find none.
 func ready(ctx context.Context, frame *Frame) error {
 	for range loadAttempts {
-		if !frame.View.Loading && !frame.View.Settling {
+		// Columns is zero for any tile count that is not a grid, which is how
+		// the document looks between two of them: reCAPTCHA leaves the outgoing
+		// grid in place while the incoming one is added, so a panel read at that
+		// moment lists both. Measured on a live run, one round came back with 32
+		// tiles — a geometry that describes nothing, handed to a solver that
+		// answered with no tiles at all, and a round spent.
+		if !frame.View.Loading && !frame.View.Settling && frame.View.Columns() != 0 {
 			return nil
 		}
 		if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
@@ -533,7 +539,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	stop := times.track("drawing the panel")
 	var drawn []byte
 	for attempt := range drawAttempts {
-		if attempt > 0 {
+		if attempt > 0 || frame.View.Columns() == 0 {
 			if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
 				stop()
 				return nil, "", err
@@ -546,6 +552,17 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 				stop()
 				return nil, "", nil
 			}
+		}
+
+		// A grid is nine tiles or sixteen. Anything else is the document caught
+		// between two of them: reCAPTCHA leaves the outgoing grid in place while
+		// the incoming one is added, so a panel read at that moment lists both.
+		// Measured on a live run, one round came back with 32 tiles, which makes
+		// Columns() zero and hands the solver a geometry that describes nothing —
+		// it answered with no tiles at all and the round was spent.
+		if frame.View.Columns() == 0 {
+			log.Debug("the panel is between grids", "tiles", len(frame.View.Tiles))
+			continue
 		}
 
 		shot, err := draw(ctx, frame)
