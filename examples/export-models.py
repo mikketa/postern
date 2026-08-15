@@ -67,10 +67,10 @@ def detector_takes(path: str, size: int) -> bool:
         print("no onnxruntime here, so the detector cannot be tried before rebuilding it",
               file=sys.stderr)
         return False
-    # Quiet, because the interesting failure prints a page of graph internals
-    # and it is an expected answer here, not an error.
+    # Fatal only, because the failure this is looking for is logged as an error
+    # — a page of graph internals — and here it is the answer, not a fault.
     options = onnxruntime.SessionOptions()
-    options.log_severity_level = 3
+    options.log_severity_level = 4
     try:
         session = onnxruntime.InferenceSession(path, options, providers=["CPUExecutionProvider"])
         session.run(None, {"pixel_values": np.zeros((1, 3, size, size), dtype=np.float32)})
