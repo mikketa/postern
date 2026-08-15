@@ -53,12 +53,17 @@ mind — it is a real effect, and it is not the only one.
 six were and were not. In four of them Google never once said the answer was wrong — no
 "veuillez réessayer", no "select all matching images" — it simply kept serving grid after
 grid, eleven to fourteen of them, which is the treadmill an address gets when it is not
-trusted rather than a solver being marked wrong. The other two are worth more than that: one
-sat on the same noised grid of cars four times over, where the solver found nothing and
-neither did I; the other was refused on a 4x4 of a coach filling the middle of the frame,
-where the solver ticked two squares the bus only grazes at the bumper. That last one is a
-real disagreement about where an object stops, it is the same trade-off the bench measures,
-and the way to change it is on 48 grids rather than on the one that just failed.
+trusted rather than a solver being marked wrong.
+
+The other two failed on the pictures, and both are the same shape of mistake — an object at
+the edge of a square. One was a grid of cars noised almost to static, served four times
+over, where the solver ticked nothing: it does hold cars, a row of them parked along the
+bottom tenth of one tile, which took a median filter and a seven-fold enlargement before I
+could see them myself. The other was a 4x4 of a coach filling the middle of the frame, where
+the solver ticked two squares the bus only grazes at the bumper. Missing a tenth of a tile
+and claiming a tenth of a tile are the two ends of one threshold, they are what the bench
+measures, and moving it is a decision to make on 48 grids rather than on the one that just
+failed.
 
 The usual escape hatch, the audio challenge, is not one here: Google refuses to serve it
 at all, answering *"Your computer or network may be sending automated queries"*. So the
