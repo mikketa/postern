@@ -224,6 +224,12 @@ DETECT_FIXED_SIZE = 640
 # to 0.11 and the squares the bus was in to 0.42 and 0.69.
 DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.05)
 
+# How much of its neighbours a 4x4 square is shown with when it is read on its
+# own. See the frames built in detected(); 0.05 above is still the right bar for
+# the boxes those frames return — measured, raising it to 0.08 costs seven
+# squares that are there and saves one that is not.
+DETECT_TILE_MARGIN = float(os.environ.get("POSTERN_DETECT_TILE_MARGIN") or 0.55)
+
 # A trained head, for the categories nothing off the shelf can answer.
 #
 # Crosswalks are the case that forced this. COCO has no class for one, ADE20K
@@ -797,26 +803,54 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
     x1 = max(b[0] + b[2] for b in boxes)
     y1 = max(b[1] + b[3] for b in boxes)
 
-    scores, coords = run([panel.crop((int(x0), int(y0), int(x1), int(y1)))], DETECT_GRID_SIZE)
+    # The whole picture, and then each square again with a margin of its
+    # neighbours around it. The whole picture is what says where a bus is; the
+    # close-ups are what find the things too small to survive being one
+    # sixteenth of it. A 4x4 grid is about 390 pixels across, so a bicycle in
+    # one square is ninety-odd pixels and perhaps seventy by the time the grid
+    # has been fitted into the field — while the same bicycle in a 3x3 tile,
+    # where it fills the frame, is found comfortably. Reading each square with
+    # room around it gives it the whole field to itself.
+    #
+    # Measured over the 48-grid bench, this is what took the misses to nothing:
+    # the whole-grid pass alone left two squares unfound — a bicycle half hidden
+    # behind others in a corner, and motorcycles parked behind a car — and both
+    # are found here. What it costs is excess: a magnified square sometimes
+    # yields a box for something the whole picture put elsewhere.
+    #
+    # The margin is a fraction of a square, and it wants to be about half of
+    # one. The bench score wanders by a couple of grids between 0.4 and 0.7,
+    # which is more than the difference is worth; what is steady across that
+    # range is that nothing goes unfound. 0.55 is the least wrong of them, and
+    # is the fraction TILE_MARGIN already uses for the same reason.
+    frames = [(x0, y0, x1, y1)]
+    for sx, sy, sw, sh in boxes:
+        mx, my = sw * DETECT_TILE_MARGIN, sh * DETECT_TILE_MARGIN
+        frames.append((max(x0, sx - mx), max(y0, sy - my),
+                       min(x1, sx + sw + mx), min(y1, sy + sh + my)))
 
     covered: dict[int, float] = {}
-    for query, box in zip(scores[0], coords[0]):
-        if int(query.argmax()) not in wanted_ids or float(query.max()) < DETECT_CONFIDENCE:
-            continue
+    for fx0, fy0, fx1, fy1 in frames:
+        scores, coords = run([panel.crop((int(fx0), int(fy0), int(fx1), int(fy1)))],
+                             DETECT_GRID_SIZE)
 
-        # Boxes come back as centre, width and height, as a fraction of the
-        # picture; the squares are in the panel's pixels.
-        cx, cy, w, h = box
-        left, right = (cx - w / 2) * (x1 - x0) + x0, (cx + w / 2) * (x1 - x0) + x0
-        top, bottom = (cy - h / 2) * (y1 - y0) + y0, (cy + h / 2) * (y1 - y0) + y0
-        print(f"found one at {left:.0f},{top:.0f} {right-left:.0f}x{bottom-top:.0f} "
-              f"({float(query.max()):.2f})", file=sys.stderr)
+        for query, box in zip(scores[0], coords[0]):
+            if int(query.argmax()) not in wanted_ids or float(query.max()) < DETECT_CONFIDENCE:
+                continue
 
-        for index, (sx, sy, sw, sh) in enumerate(boxes):
-            overlap_x = max(0.0, min(sx + sw, right) - max(sx, left))
-            overlap_y = max(0.0, min(sy + sh, bottom) - max(sy, top))
-            share = overlap_x * overlap_y / (sw * sh)
-            covered[index] = max(covered.get(index, 0.0), share)
+            # Boxes come back as centre, width and height, as a fraction of the
+            # picture; the squares are in the panel's pixels.
+            cx, cy, w, h = box
+            left, right = (cx - w / 2) * (fx1 - fx0) + fx0, (cx + w / 2) * (fx1 - fx0) + fx0
+            top, bottom = (cy - h / 2) * (fy1 - fy0) + fy0, (cy + h / 2) * (fy1 - fy0) + fy0
+            print(f"found one at {left:.0f},{top:.0f} {right-left:.0f}x{bottom-top:.0f} "
+                  f"({float(query.max()):.2f})", file=sys.stderr)
+
+            for index, (sx, sy, sw, sh) in enumerate(boxes):
+                overlap_x = max(0.0, min(sx + sw, right) - max(sx, left))
+                overlap_y = max(0.0, min(sy + sh, bottom) - max(sy, top))
+                share = overlap_x * overlap_y / (sw * sh)
+                covered[index] = max(covered.get(index, 0.0), share)
 
     chosen = {i for i, share in covered.items() if share >= DETECT_OVERLAP}
     for index in sorted(chosen):
