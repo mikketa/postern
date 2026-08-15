@@ -150,6 +150,11 @@ const (
 	// solverErrLines is how much of a failing solver's output to quote back.
 	solverErrLines = 3
 
+	// drawAttempts is how many times to ask the document to draw the panel
+	// before falling back to photographing the screen. Cheap: a draw that
+	// succeeds is 24ms, and one that refuses is less.
+	drawAttempts = 4
+
 	// paintAttempts is how many times to wait and photograph the grid again
 	// while it is still being painted.
 	paintAttempts = 6
@@ -505,6 +510,66 @@ func ready(ctx context.Context, frame *Frame) error {
 // between them and a finished one does not — so this takes photographs until
 // two in a row agree.
 func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, log *slog.Logger) ([]point, string, error) {
+	// Ask the document for the picture before asking the screen. Everything
+	// below this is machinery for coping with a compositor postern does not
+	// control; a canvas drawn from the tiles' own images has no compositor in
+	// it, so a panel that draws needs none of it — no waking the page, no
+	// photographing it twice to find out whether it had finished, and no way for
+	// it to come back white or half faded.
+	if err := frame.Reread(ctx); err != nil {
+		return nil, "", err
+	}
+	if !frame.Open() {
+		return nil, "", nil
+	}
+
+	// Retried rather than given up on. Drawing refuses while the pictures for
+	// this round are still arriving — half the tiles incomplete is half a panel,
+	// which is worse than none — and a replacement can start after the wait for
+	// it has already passed. A draw costs 24ms measured, so looking again is
+	// cheaper than the photograph it would otherwise fall back to, and measured
+	// over three runs the fallback was taken three times, every one of them on a
+	// grid whose pictures had not landed yet.
+	stop := times.track("drawing the panel")
+	var drawn []byte
+	for attempt := range drawAttempts {
+		if attempt > 0 {
+			if err := input.Pause(ctx, loadWaitMin, loadWaitMax); err != nil {
+				stop()
+				return nil, "", err
+			}
+			if err := frame.Reread(ctx); err != nil {
+				stop()
+				return nil, "", err
+			}
+			if !frame.Open() {
+				stop()
+				return nil, "", nil
+			}
+		}
+
+		shot, err := draw(ctx, frame)
+		if err != nil {
+			stop()
+			return nil, "", err
+		}
+		// Checked for blankness like any other picture. Drawing cannot produce
+		// a panel that was never painted, but it can produce one whose tiles are
+		// all still the placeholder.
+		if len(shot) > 0 && !blank(shot, frame.View.Tiles) {
+			drawn = shot
+			break
+		}
+		log.Debug("the panel would not draw yet", "attempt", attempt+1)
+	}
+	stop()
+
+	if drawn != nil {
+		log.Debug("panel drawn from the document", "bytes", len(drawn))
+		return answer(ctx, frame, opts, times, drawn)
+	}
+	log.Debug("the panel would not draw, photographing the screen instead")
+
 	// Get the page painted before the first photograph too. The panel fades in
 	// over the page, and under a virtual display that fade stops wherever it was
 	// when the last frame was composited — measured, the opening grid of every
@@ -515,7 +580,7 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 	// Everything is measured again afterwards, because provoking a repaint
 	// means changing the layout and the panel does not always come back exactly
 	// where it was.
-	stop := times.track("waking the page")
+	stop = times.track("waking the page")
 	err := stir(ctx, frame, true, times)
 	stop()
 	if err != nil {
@@ -595,6 +660,15 @@ func inspect(ctx context.Context, frame *Frame, opts Options, times *timings, lo
 		return nil, "", errBlank
 	}
 
+	return answer(ctx, frame, opts, times, shot)
+}
+
+// answer hands a finished picture of the panel to the solver, saving it first
+// if the caller asked for a corpus. Shared by both ways of getting one, so that
+// a panel drawn from the document and a panel photographed off the screen are
+// treated identically from here on.
+func answer(ctx context.Context, frame *Frame, opts Options, times *timings,
+	shot []byte) ([]point, string, error) {
 	saved := ""
 	if opts.SavePanels != "" {
 		var err error
