@@ -64,14 +64,20 @@ fetch "$BASE/onnx/vision_model_quantized.onnx" clip-vision.onnx
 fetch "$BASE/onnx/text_model_quantized.onnx" clip-text.onnx
 fetch "$BASE/tokenizer.json" clip-tokenizer.json
 
-# The segmentation model, which is what answers a 4x4 grid: those squares are
-# one photograph cut up, and which of them hold the bus is a question about
-# pixels. SegFormer-B0 on ADE20K, 15MB, and the 4x4 path is simply not taken
-# without it.
+# The segmentation model. It answers a 4x4 grid outright — those squares are one
+# photograph cut up, and which of them hold the bus is a question about pixels —
+# and it is asked again, tile by tile, about the 3x3 categories CLIP is worst at.
+# SegFormer-B0 on ADE20K, 15MB, and neither path is taken without it.
 #
-# B4 is markedly better — over saved grids with the answers checked by eye, one
-# tick in excess against five for B0 — but it is 257MB and ships only as
-# PyTorch weights. To use it instead:
+# B4 is markedly better and worth the download if bridges matter. Over saved
+# grids with the answers checked by eye it ticks one square in excess against
+# five for B0, and the tile pass is where the gap shows: over six labelled grids
+# of bridges and hills, B0 found every hill and not one bridge — the class is
+# there, the model simply never predicts it at this size — while B4 found both.
+# On the 48-grid bench that is one whole grid, 42 against 43.
+#
+# It is 257MB against 15MB and ships only as PyTorch weights, so it is not the
+# default. To use it instead, with about 180MB of CPU-only torch to build it:
 #
 #   pip install torch transformers onnx
 #   python -c "
