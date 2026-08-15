@@ -283,7 +283,7 @@ func (b *Browser) NewTab() (context.Context, context.CancelFunc, error) {
 		return nil, nil, err
 	}
 
-	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), bypassCSP(), installPatches()); err != nil {
+	if err := chromedp.Run(tabCtx, b.hideHeadless(), b.sizeWindow(), focusPage(), bypassCSP(), installPatches()); err != nil {
 		closeTab()
 		return nil, nil, fmt.Errorf("browser: open tab: %w", err)
 	}
@@ -343,6 +343,24 @@ func (b *Browser) answerProxy(ctx context.Context) error {
 		return fmt.Errorf("browser: sign in to the proxy: %w", err)
 	}
 	return nil
+}
+
+// focusPage makes the tab believe it is the window someone is looking at.
+//
+// A virtual display has no window manager, so nothing ever gives Chrome's
+// window the focus: measured on the display postern draws on,
+// `document.hasFocus()` comes back false while `visibilityState` is "visible".
+// A page that is visible, receives clicks on a checkbox, and is not focused is
+// a combination no one sitting at a computer produces — and focus is not
+// obscure, it is what a page uses to know whether to keep playing a video.
+//
+// This asks the renderer to treat the page as focused, which is the same thing
+// a window manager would arrange, rather than overriding hasFocus in page
+// JavaScript where the lie would be visible in the property descriptor.
+func focusPage() chromedp.Action {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
+		return emulation.SetFocusEmulationEnabled(true).Do(ctx)
+	})
 }
 
 // bypassCSP lets postern render its own widget on pages that forbid it.
