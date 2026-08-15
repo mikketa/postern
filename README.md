@@ -434,6 +434,35 @@ with the command to refit it. `examples/probe-crosswalk.json` is that head, fitt
 what `install-vision.sh` installs, and the script installs it. The weights only mean anything against the encoder they were fitted on, so
 each head names its model and is ignored under any other.
 
+**How any of this gets judged.** A live run measures the solver, the address, Google's
+opinion of that address and the time of night all at once, and reports one bit at the end.
+Six runs in one evening, with nothing changed between them, produced 0, 1 and 2 tokens out
+of three — a spread that would swallow any change worth making. Two separate conclusions
+were nearly drawn from three-run samples before that was noticed.
+
+So `examples/bench.py` scores a solver against saved grids whose answers were written down
+by eye:
+
+```sh
+python examples/bench.py ~/panels labels.json --solver ~/.cache/postern-vision/solve
+```
+
+Deterministic, no network, seconds rather than minutes, and it reports **grids answered
+exactly** — because that is what reCAPTCHA grades. A grid with one square missed is not 89%
+right; it is wrong, and on a dynamic grid it brings the challenge back. Missed and excess
+squares are reported alongside, since they say which way a solver is wrong and are what a
+confidence threshold trades between.
+
+Built from 48 real grids spanning what reCAPTCHA actually serves — bicycles, motorcycles,
+cars, buses, hydrants, traffic lights, crosswalks, bridges, hills — in both 3x3 and 4x4, and
+deduplicated on the pixels of the grid, since reCAPTCHA serves the same challenge over and
+over and a bench that counts one grid four times is reporting its own repetition.
+
+The current example solver scores **24 of 48 exactly, 25 squares missed and 8 in excess**.
+That the misses outnumber the excess three to one is the most useful thing on this page: it
+says the solver is not confused about what a bicycle is, it is failing to see them, which
+points at the detector's fixed-size build and its threshold rather than at the models.
+
 **More tiles was the wrong answer, and the corpus said so.** The obvious way to fix a head
 that misses a plain crossing is to label more grids. Measured before doing it: fit on 4, 6,
 8, 10 and 12 grids, score each by leaving one grid out, and the mistakes per grid go 1.19,
