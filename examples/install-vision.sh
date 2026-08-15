@@ -92,11 +92,24 @@ fetch https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/m
 # them, where scoring tiles with CLIP was nine ticks in excess over three grids
 # and the mask was one short and one over.
 #
-# This published build is compiled for a fixed 640x640 input, which is 6.7x
-# enlargement on a 96-pixel reCAPTCHA tile and costs accuracy: five ticks it
-# should have made, and seven times the CPU. Exporting it yourself gives a build
-# that takes any size, which the solver then feeds 224 for a tile and 320 for a
-# grid. Worth the 2GB of PyTorch if you are running this often:
+# This published build declares a fully dynamic input and then refuses anything
+# but 640, deep in the graph: the feature map's size was computed once while
+# tracing and frozen as a literal, so `Reshape` asks for 400 positions (20x20,
+# and 20 is 640/32) whatever it is given. Marking the outer axes dynamic does not
+# reach constants inside, and since it works perfectly at 640 nobody noticed.
+#
+# The solver copes by laying a tile on a 640 field rather than stretching it to
+# fill one, which is most of the difference. Exporting the model yourself is the
+# rest of it. Measured over the 48-grid bench, same solver, same everything else:
+#
+#     published build, tile stretched to 640     21/48 grids exact
+#     published build, tile laid on the field    29/48
+#     re-exported, tile laid on a 224 field      35/48
+#
+# It is 165MB against 44MB, unquantised, and about 180MB of PyTorch to produce —
+# the CPU-only wheel, not the 2GB one with the CUDA libraries. Worth it if you
+# are running this often; the solver picks it up simply by finding it at
+# detect.onnx.
 #
 #   pip install torch transformers onnx
 #   python -c "
