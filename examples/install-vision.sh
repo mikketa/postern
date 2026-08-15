@@ -97,7 +97,7 @@ fetch "$BASE/tokenizer.json" clip-tokenizer.json
 # the tile pass is where the gap shows: over six labelled grids of bridges and
 # hills, B0 found every hill and not one bridge — the class is there, the model
 # simply never predicts it at this size — while B4 found both. On the 48-grid
-# bench that is one whole grid, 47 against 48. It is 257MB against 15MB and
+# bench that is one whole grid, 47 against 48. It is 258MB against 15MB and
 # ships only as PyTorch weights, which is the whole reason for -export.
 if [ "$EXPORT" = no ]; then
 	fetch https://huggingface.co/Xenova/segformer-b0-finetuned-ade-512-512/resolve/main/onnx/model.onnx segment.onnx
