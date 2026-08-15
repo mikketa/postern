@@ -209,7 +209,7 @@ DETECT_FIXED_SIZE = 640
 # of a bus is still a bus, but a box that merely clips the corner of a square is
 # not: measured, the square above a bus that only its wing mirror reached came
 # to 0.11 and the squares the bus was in to 0.42 and 0.69.
-DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.15)
+DETECT_OVERLAP = float(os.environ.get("POSTERN_DETECT_OVERLAP") or 0.05)
 
 # A trained head, for the categories nothing off the shelf can answer.
 #
