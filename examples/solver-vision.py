@@ -692,17 +692,48 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
 
     model = session(DETECT_MODEL)
 
-    def feed(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
+    def fit(image: Image.Image, size: int) -> Image.Image:
+        """The picture at `size`, keeping its own scale rather than filling.
+
+        The published build only takes 640x640, so a 96px tile asked on its own
+        used to be stretched nearly seven times before the model saw it — an
+        enlargement of a thumbnail, which is not a photograph of anything.
+        Measured on a bicycle in a dark porch this solver kept missing: the same
+        model, the same weights, scored it 0.026 stretched and 0.234 laid on a
+        640 field at its own size.
+
+        Enlarged when the picture is smaller than the field and shrunk when it
+        is larger, never past its own scale: a 390px grid still has to fit.
+        """
+        scale = min(size / image.width, size / image.height)
+        if scale < 1.0:
+            image = image.resize((max(1, int(image.width * scale)),
+                                  max(1, int(image.height * scale))),
+                                 Image.Resampling.LANCZOS)
+        if image.size == (size, size):
+            return image
+        # Mid-grey rather than black: an abrupt edge against black is an edge,
+        # and a detector will happily find things along it.
+        field = Image.new("RGB", (size, size), (114, 114, 114))
+        field.paste(image, ((size - image.width) // 2, (size - image.height) // 2))
+        return field
+
+    def feed(images: list[Image.Image], size: int, pad: bool) -> tuple[np.ndarray, np.ndarray]:
         batch = np.stack([
-            np.asarray(image.resize((size, size), Image.Resampling.LANCZOS), dtype=np.float32)
-            / 255.0
+            np.asarray(fit(image.convert("RGB"), size) if pad
+                       else image.convert("RGB").resize((size, size), Image.Resampling.LANCZOS),
+                       dtype=np.float32) / 255.0
             for image in images
         ]).transpose(0, 3, 1, 2)
         return model.run(None, {"pixel_values": batch})
 
-    def run(images: list[Image.Image], size: int) -> tuple[np.ndarray, np.ndarray]:
+    def run(images: list[Image.Image], size: int, pad: bool = False) -> tuple[np.ndarray, np.ndarray]:
+        # Only where the answer is a score. Laying a picture on a field moves
+        # everything in it, so a box that comes back in the field's coordinates
+        # no longer maps onto the panel — which is why the grid pass, whose
+        # whole answer is boxes, still stretches.
         try:
-            logits, boxes = feed(images, size)
+            logits, boxes = feed(images, size, pad)
         except Exception:
             # The published build declares a dynamic input and then refuses
             # anything but the size it was traced at, deep inside the graph —
@@ -710,7 +741,7 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
             # sizes this would rather use; see install-vision.sh.
             print(f"detector will not take {size}px, falling back to {DETECT_FIXED_SIZE}",
                   file=sys.stderr)
-            logits, boxes = feed(images, DETECT_FIXED_SIZE)
+            logits, boxes = feed(images, DETECT_FIXED_SIZE, pad)
 
         # Detectors score each class on its own — a picture can hold a bus and
         # a bicycle — so the scores are logistic, not a softmax over classes.
@@ -718,7 +749,7 @@ def detected(panel: Image.Image, boxes: list, wanted: tuple) -> set | None:
 
     # Nine tiles are nine photographs: ask each one whether the thing is in it.
     if len(boxes) != 16:
-        scores, _ = run([crop(panel, box, 0.0) for box in boxes], DETECT_TILE_SIZE)
+        scores, _ = run([crop(panel, box, 0.0) for box in boxes], DETECT_TILE_SIZE, pad=True)
         chosen = set()
         for index, tile in enumerate(scores):
             best = 0.0
