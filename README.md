@@ -473,6 +473,19 @@ Laying the tile down instead of stretching it took the example solver from **21 
 exact to 29**, and the misses from 33 to 19. No new model, no download — the model was never
 blind, it was being handed a seven-fold enlargement of a thumbnail.
 
+Re-exporting the detector so it accepts the size it is being given takes it to **33**, and
+counting a square the detector's box merely clips — 5% of it rather than 15% — to **35 of
+48**, with misses down to 5. The four together, each measured on its own:
+
+| | grids exact | missed | in excess |
+| --- | --- | --- | --- |
+| published detector, tile stretched to fill 640 | 21/48 | 33 | 8 |
+| tile laid on the field instead | 29/48 | 19 | 7 |
+| detector re-exported to take 224 | 33/48 | 23 | 6 |
+| a clipped square counts | **35/48** | **5** | 12 |
+
+None of that is a better model. It is the same weights throughout, fed properly.
+
 Two things that looked promising and were not, both measured here rather than argued about:
 detecting on the whole 3x3 mosaic in one pass, which scores that same bicycle at 0.768 but
 finds nothing else on the grid and cost 10 grids; and moving the confidence threshold, whose
