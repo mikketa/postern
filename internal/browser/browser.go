@@ -154,25 +154,21 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 		// controlled by automated test software" bit.
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("headless", opts.Headless),
-		// Keep the renderer producing frames. Nobody is looking at this window —
-		// it is on a virtual display or in headless — and Chrome throttles or
-		// stops compositing for a window it believes is occluded or in the
-		// background. What that looks like from here is a panel that photographs
-		// as a flat white rectangle: the document has the grid, every picture is
-		// loaded and decoded, and the pixels were simply never painted.
-		//
-		// Measured on the demo page before these were set: 5 rounds of 13 under a
-		// virtual display and 8 of 11 under headless came back blank. The solver
-		// answers a blank grid by finding nothing in it, which is a legal answer,
-		// so the round was spent submitting nothing.
-		//
-		// None of the three is visible to a page. They change when Chrome
-		// composites, not what a document can ask about itself, and a focused
-		// window on a real desktop behaves as though all three were set.
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-background-timer-throttling", true),
 	)
+
+	// Nothing here tries to stop Chrome throttling the renderer, and that is a
+	// measurement rather than an oversight.
+	//
+	// A panel that photographs as a flat white rectangle — the document has the
+	// grid, every picture loaded and decoded, the pixels never painted — looks
+	// exactly like a window Chrome has decided nobody is looking at, and the
+	// standard answer is --disable-backgrounding-occluded-windows,
+	// --disable-renderer-backgrounding and --disable-background-timer-throttling.
+	// Measured over eight runs on the demo page, alternating with and without
+	// them so that Google's mood drifting could not be mistaken for an effect:
+	// unpainted grids per run came out 3, 7, 0 and 6 with the flags, and 7, 7, 7
+	// and 0 without. The spread between runs is larger than any difference
+	// between the two arms, so they bought nothing and are not carried.
 
 	if opts.Headless {
 		// Headless falls back to software rendering, and SwiftShader in the
