@@ -213,7 +213,7 @@ DETECT_CONFIDENCE = float(os.environ.get("POSTERN_DETECT_CONFIDENCE") or 0.35)
 # the field is exactly the case where that matters. Sizes here are multiples of
 # 32 by an odd factor on purpose, not by accident.
 DETECT_TILE_SIZE = 288
-DETECT_GRID_SIZE = 320
+DETECT_GRID_SIZE = 288
 
 # What the published build was traced at, and the only size it accepts.
 DETECT_FIXED_SIZE = 640
