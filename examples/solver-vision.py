@@ -194,12 +194,25 @@ DETECT_CONFIDENCE = float(os.environ.get("POSTERN_DETECT_CONFIDENCE") or 0.35)
 # so it goes in whole and the squares are read off the boxes.
 #
 # Bigger is not better for either. reCAPTCHA serves tiles about 96 pixels
-# square, so 224 is already a 2.3x enlargement and 640 is a 6.7x one — and
+# square, so 288 is already a 3x enlargement and 640 is a 6.7x one — and
 # measured over the grids checked by eye, feeding it 640 cost five ticks it
 # should have made and took seven times as long. A model exported at a fixed
 # 640, which is how the published ONNX build comes, is used at 640 anyway;
 # there is nothing else to do with it.
-DETECT_TILE_SIZE = 224
+#
+# The size does not behave smoothly, and the reason is worth knowing before
+# anyone tries to tune it. Over the 48-grid bench:
+#
+#     224  40/48      256  36/48
+#     288  42/48      320  36/48
+#     352  42/48      384  37/48
+#
+# The left column is 32x7, 32x9 and 32x11, the right 32x8, 32x10 and 32x12.
+# The backbone strides by 32, so the left column gives a feature map with an
+# odd number of cells and therefore a centre one — and a tile laid centred on
+# the field is exactly the case where that matters. Sizes here are multiples of
+# 32 by an odd factor on purpose, not by accident.
+DETECT_TILE_SIZE = 288
 DETECT_GRID_SIZE = 320
 
 # What the published build was traced at, and the only size it accepts.
