@@ -60,6 +60,19 @@ jobs:
       - name: install xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
+      # Ubuntu 24.04 — which ubuntu-latest now is — refuses unprivileged user
+      # namespaces through AppArmor, and Chrome aborts on startup rather than
+      # run without a sandbox: "No usable sandbox!". Every browser test failed
+      # on it, none of them for a reason of their own.
+      #
+      # Lifting the restriction rather than passing --no-sandbox: the flag would
+      # have to be set where postern launches Chrome, so it would ship to
+      # everyone, weaken the browser for real users, and add one more thing that
+      # marks the browser as driven. This is the runner's problem and it is
+      # fixed on the runner.
+      - name: let chrome build its sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: report what we are driving
         run: |
           google-chrome --version
