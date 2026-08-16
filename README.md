@@ -1036,12 +1036,32 @@ correctly and then failing to submit, re-reading the unchanged panel, and answer
 The comment above `Verify` blames a button clipped below the panel; postern's own log
 contradicts it — `buttonY=530 panelHeight=580`, the button is inside.
 
-One more thing is measured and not yet explained: the panel is **never** photographed
-successfully. All six were "drawn from the document" — reconstructed from the DOM because
-the screenshot came back unpainted — while the identically-configured control painted its
-panel every time. An unpainted compositing layer with no hit-test data would explain
-swallowed clicks exactly, and that is where the next instrumentation goes: log the viewport
-coordinate of each verify click and what the compositor believes is at it.
+### Where the swallowed clicks were going
+
+Logging the viewport coordinate of each verify click, and asking the page what it hit-tests
+there, answered it in one run:
+
+```
+verify by pointer  origin=112,150    viewport=454,700    under="bframe 112,150 400x580"
+verify by pointer  origin=112,150    viewport=454,700    under="bframe 112,150 400x580"
+verify by pointer  origin=112,150    viewport=454,700    under="bframe 112,150 400x580"
+verify by pointer  origin=112,-9999  viewport=454,-9448  under=rien
+```
+
+A click is aimed by arithmetic: the frame's origin, plus an offset measured inside the frame.
+The origin comes from finding the frame's element in the host page **by its address** — and
+reCAPTCHA gives every widget on the page a bframe whose `src` is the same string, sitekey
+included, parking the closed ones at `y=-9999` under `visibility:hidden`. On a page that
+carries its own widget beside the one postern renders, `find(f => f.src === url)` therefore
+returned a parked frame roughly a quarter of the time, and that round's clicks were dispatched
+nine thousand pixels above the window.
+
+The fix is to prefer a candidate that is actually on screen and not hidden, falling back to
+the first when they are all parked — between rounds they are. `TestHostPositionPrefersThe`
+`DeployedFrame` pins it with the measured numbers: without the fix it answers `1,-9999`.
+
+This is also why the panel never photographed: the same wrong origin is what the screenshot
+is cropped to, so it came back blank and got reconstructed from the DOM instead.
 
 Two smaller defects fell out of the same session: `-display host` starts Chrome without
 `--ozone-platform=x11`, so it tries Wayland and dies where there is no compositor; and
