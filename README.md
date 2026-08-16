@@ -986,16 +986,40 @@ What postern does on its own:
   postern gives up and says the address is what is being refused, rather than spending the
   rest of the timeout and reporting "no token" as though the answers were wrong.
 
-**Identities without addresses are not identities.** The fleet was measured against the
-single profile it replaces, on the same connection, ten solves each: six identities that
-rotate, rest and warm themselves came back with **3 tokens**, against **4** for one profile
-hammered — the same number, given how noisy ten runs are. `serve` says so at startup when
-no identity has a proxy, and it is right: six profiles behind one address are one identity
-wearing six hats. The profile is not the unit of reputation. The address is.
+**Profiles are not the lever either.** The fleet was measured against the single profile it
+replaces, on the same connection, ten solves each: six identities that rotate, rest and warm
+themselves came back with **3 tokens**, against **4** for one profile hammered — the same
+number, given how noisy ten runs are.
 
-That is also the honest answer to how this compares with a commercial solver. Their edge is
-not a better model or a cleverer browser; it is thousands of residential addresses and the
-volume to keep each one lightly used. What is left to buy here is addresses, not code.
+### The control that should have been run first
+
+Everything above measures postern against postern, which cannot tell a hard problem from a
+self-inflicted one. The missing control is a browser that is *not* postern, on the same
+machine, the same address, the same evening: a stock Chrome on a two-minute-old profile,
+clicked through the X server with XTEST, and read by a human.
+
+| browser | tokens | grids per token |
+| --- | --- | --- |
+| stock Chrome, fresh profile, XTEST clicks | **4/4** | **1** |
+| ...plus every one of postern's 26 Chrome flags | **1/1** | 1 |
+| ...plus `--remote-debugging-port` and clicks dispatched over CDP | **1/1** | 1 |
+| postern, same address, same evening | 4/10 | 6 or more |
+
+Six for six, always one grid, answered slowly and by hand. So the ceiling is not the
+address — the same address waves a stock Chrome through on the first grid. It is not profile
+age either: those profiles were minutes old, with no history and no cookies, which is *less*
+than the warmed profile postern was using. And it is none of the things that get blamed for
+this by default, because they were added one at a time and none of them cost a token: not
+the flag set, not the open debugging port, not synthesising the pointer through CDP.
+
+That leaves what postern does and this control did not — script injection on every document,
+`Page.setBypassCSP`, focus emulation, and the panel handling that has to press Enter because
+the buttons are laid out below the frame and never get painted. One of those is the tell, and
+it is a bug to find rather than an address to buy.
+
+The earlier claim here, that the address was the ceiling and a commercial solver's only real
+edge was its pool of residential IPs, was wrong. It came from comparing postern against
+itself and never against a browser that works.
 
 What it cannot do for you, and there is no clever way around either:
 
