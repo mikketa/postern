@@ -1012,10 +1012,40 @@ than the warmed profile postern was using. And it is none of the things that get
 this by default, because they were added one at a time and none of them cost a token: not
 the flag set, not the open debugging port, not synthesising the pointer through CDP.
 
-That leaves what postern does and this control did not — script injection on every document,
-`Page.setBypassCSP`, focus emulation, and the panel handling that has to press Enter because
-the buttons are laid out below the frame and never get painted. One of those is the tell, and
-it is a bug to find rather than an address to buy.
+Those were then added to the control one at a time, and none of them costs a token either:
+script injection on every document, `Page.setBypassCSP`, focus emulation, postern's own
+`grecaptcha.render` widget in its `position:fixed; transform:translateY(-50%); z-index:999999`
+host, and the second browser window chromedp opens. The control kept getting tokens through
+all of it — including a round where a deliberately wrong answer came back "please try again"
+and the corrected one was accepted, which is what being graded normally looks like.
+
+### What postern actually does wrong
+
+With every external explanation eliminated, its own logs and saved panels say it plainly.
+One run, six challenges:
+
+- five pointer clicks on the verify button, **four of them swallowed** — dispatched, and the
+  panel does not move;
+- `#recaptcha-verify-button` **refused focus four times out of four**, so the keyboard
+  fallback had nothing to type into either;
+- three saved panels in a row **byte-identical**: the same grid photographed, answered,
+  photographed again. `-save-panels` makes this visible in one `md5sum`.
+
+So the endless challenge is not reCAPTCHA refusing the address. It is postern answering
+correctly and then failing to submit, re-reading the unchanged panel, and answering it again.
+The comment above `Verify` blames a button clipped below the panel; postern's own log
+contradicts it — `buttonY=530 panelHeight=580`, the button is inside.
+
+One more thing is measured and not yet explained: the panel is **never** photographed
+successfully. All six were "drawn from the document" — reconstructed from the DOM because
+the screenshot came back unpainted — while the identically-configured control painted its
+panel every time. An unpainted compositing layer with no hit-test data would explain
+swallowed clicks exactly, and that is where the next instrumentation goes: log the viewport
+coordinate of each verify click and what the compositor believes is at it.
+
+Two smaller defects fell out of the same session: `-display host` starts Chrome without
+`--ozone-platform=x11`, so it tries Wayland and dies where there is no compositor; and
+chromedp's second window leaves an orphan `about:blank` window open for the whole run.
 
 The earlier claim here, that the address was the ceiling and a commercial solver's only real
 edge was its pool of residential IPs, was wrong. It came from comparing postern against
