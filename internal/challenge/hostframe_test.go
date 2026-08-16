@@ -47,7 +47,7 @@ func TestHostPositionPrefersTheDeployedFrame(t *testing.T) {
 		t.Fatalf("navigate: %v", err)
 	}
 
-	x, y, err := hostPosition(tabCtx, frameURL)
+	x, y, deployed, err := hostPosition(tabCtx, frameURL)
 	if err != nil {
 		t.Fatalf("host position: %v", err)
 	}
@@ -55,6 +55,9 @@ func TestHostPositionPrefersTheDeployedFrame(t *testing.T) {
 	// The deployed frame's corner, not the parked one's.
 	if x != 112 || y != 150 {
 		t.Errorf("origin = %v,%v, want 112,150 — the parked frame sits at 1,-9999", x, y)
+	}
+	if !deployed {
+		t.Error("deployed = false, want true: one of the two frames is on screen")
 	}
 }
 
@@ -89,12 +92,43 @@ func TestHostPositionFallsBackWhenEveryFrameIsParked(t *testing.T) {
 		t.Fatalf("write page: %v", err)
 	}
 
-	x, y, err := hostPosition(tabCtx, frameURL)
+	x, y, deployed, err := hostPosition(tabCtx, frameURL)
 	if err != nil {
 		t.Fatalf("host position: %v", err)
 	}
 	if x != 7 || y != -9999 {
 		t.Errorf("origin = %v,%v, want the only frame at 7,-9999", x, y)
+	}
+
+	// And the caller has to be told, because a click aimed here goes nowhere.
+	if deployed {
+		t.Error("deployed = true, want false: every frame on the page is parked")
+	}
+}
+
+// TestParkedPanelIsNotOpen separates the two questions that used to be one. The
+// panel's own document is identical whether or not reCAPTCHA has moved the
+// iframe off screen, so only the outside measurement can tell, and clicking
+// while parked is what sent the pointer to y=-9448.
+func TestParkedPanelIsNotOpen(t *testing.T) {
+	live := View{
+		Height: 580,
+		Tiles:  []Box{{W: 100, H: 100}, {W: 100, H: 100}},
+	}
+
+	deployed := &Frame{View: live}
+	if !deployed.Open() {
+		t.Error("a panel on screen with tiles should be open")
+	}
+
+	parked := &Frame{View: live, Parked: true}
+	if parked.Open() {
+		t.Error("a parked panel reports the same view from the inside, but nothing " +
+			"can be clicked in it")
+	}
+	if !parked.hasPanel() {
+		t.Error("hasPanel should still see the tiles: that is how Reread knows to " +
+			"measure the frame again instead of giving up on it")
 	}
 }
 
