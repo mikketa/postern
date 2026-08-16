@@ -935,6 +935,28 @@ and it is where reCAPTCHA v2 is actually won or lost — the evening that produc
 numbers at the top of this file ended at 0/5 with a better solver than it started at 3/5
 with.
 
+**The outcome is settled before the first picture.** Counted over seventeen runs across two
+campaigns, grids served in a run against whether it ended in a token:
+
+| grids served in the run | outcome |
+| --- | --- |
+| **6** | 7 runs, **7 tokens** |
+| 12 | 2 runs, 1 token |
+| 8, 10, 11, 13, 14 | 8 runs, **0 tokens** |
+
+A run either gets a finite challenge — six grids, occasionally two of them — and a token at
+the end of it, or it gets a treadmill that never terminates however well the grids are
+answered. Nothing in between happens. Which one you get is decided at the checkbox, and the
+vision cannot influence it: the same solver, at 48 of 48 on the bench, is on both rows.
+
+That is worth knowing before optimising anything. It means a token rate measures the
+address and the profile, not the answers, and it means "answer the pictures better" has a
+ceiling that was reached some time ago. It also gives a cheaper instrument than the token:
+**how often a challenge is served at all**. A browser Google trusts ticks the checkbox and
+is waved through in about five seconds. Measured here, ten runs with no solver configured:
+ten challenges, no waves through — before and after a warm-up that took the profile from 6
+cookies to 77 and from 5 URLs of history to 33, which moved it not at all.
+
 What postern does on its own:
 
 - **The profile is kept.** `-profile` defaults to a stable directory precisely so cookies,
