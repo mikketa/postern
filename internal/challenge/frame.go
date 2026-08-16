@@ -133,10 +133,33 @@ const openPanelScript = `(() => {
 // hostFrameScript finds where a frame's element sits in the page it belongs to.
 // Asked of the host document because the frame itself cannot know: a document
 // has no way of seeing where it was embedded.
+//
+// Matching on the address alone is not enough, and the difference is every click
+// in the round. reCAPTCHA keeps a bframe for each widget on the page and parks
+// the closed ones at y=-9999 with visibility:hidden — and their src is the same
+// string, sitekey included. So a page that carries its own widget beside the one
+// postern renders offers two identical candidates, one of them parked, and
+// taking the first was taking the parked one about a quarter of the time:
+// measured, verify clicks left at viewport y=-9448 with nothing under them,
+// which is what "the click was swallowed" had been recording all along.
+//
+// Deployed is therefore preferred over first: on screen, and not hidden.
 const hostFrameScript = `(url => {
   const frames = [...document.querySelectorAll('iframe')];
-  const frame = frames.find(f => f.src === url) ||
-                frames.find(f => (f.src || '').includes('%s'));
+  const exact = frames.filter(f => f.src === url);
+  const candidates = exact.length ? exact
+                                  : frames.filter(f => (f.src || '').includes('%s'));
+
+  const deployed = candidates.filter(f => {
+    if (getComputedStyle(f).visibility === 'hidden') return false;
+    const r = f.getBoundingClientRect();
+    return r.bottom > 0 && r.right > 0 &&
+           r.top < innerHeight && r.left < innerWidth;
+  });
+
+  // Falling back to the first candidate rather than to nothing: between rounds
+  // every bframe is parked, and a stale origin beats no panel at all.
+  const frame = deployed[0] || candidates[0];
   if (!frame) return null;
 
   const r = frame.getBoundingClientRect();
@@ -273,6 +296,31 @@ func (f *Frame) Viewport() (x, y, w, h float64) {
 // Point maps a position inside the challenge document onto the viewport.
 func (f *Frame) Point(x, y float64) (float64, float64) {
 	return f.OriginX + x, f.OriginY + y
+}
+
+// UnderPoint names whatever the host page hit-tests at a viewport coordinate.
+//
+// A click is aimed by arithmetic — the frame's origin plus an offset read inside
+// it — and nothing so far checks that the arithmetic lands on the frame it came
+// from. This asks the page, in the same coordinates the pointer uses, and is
+// only ever called to be logged.
+func (f *Frame) UnderPoint(ctx context.Context, x, y float64) string {
+	script := fmt.Sprintf(`(() => {
+  const el = document.elementFromPoint(%f, %f);
+  if (!el) return 'rien';
+  const src = (el.getAttribute && el.getAttribute('src')) || '';
+  const kind = src.includes('/bframe') ? 'bframe' :
+               src.includes('/anchor') ? 'anchor' : el.tagName.toLowerCase();
+  const r = el.getBoundingClientRect();
+  return kind + ' ' + Math.round(r.x) + ',' + Math.round(r.y) +
+         ' ' + Math.round(r.width) + 'x' + Math.round(r.height);
+})()`, x, y)
+
+	var what string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &what)); err != nil {
+		return "illisible"
+	}
+	return what
 }
 
 // Finder locates challenge panels in one tab, and remembers what it had to
