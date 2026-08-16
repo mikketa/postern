@@ -24,6 +24,7 @@ const probeJS = `(() => {
   return {
     userAgent: navigator.userAgent,
     webdriver: navigator.webdriver === true,
+    hasFocus: document.hasFocus(),
     screenWidth: screen.width,
     screenHeight: screen.height,
     innerWidth: innerWidth,
@@ -35,6 +36,7 @@ const probeJS = `(() => {
 type fingerprint struct {
 	UserAgent    string `json:"userAgent"`
 	Webdriver    bool   `json:"webdriver"`
+	HasFocus     bool   `json:"hasFocus"`
 	ScreenWidth  int    `json:"screenWidth"`
 	ScreenHeight int    `json:"screenHeight"`
 	InnerWidth   int    `json:"innerWidth"`
@@ -93,6 +95,12 @@ func TestHeadlessFingerprint(t *testing.T) {
 	}
 	if fp.Webdriver {
 		t.Error("navigator.webdriver is true")
+	}
+	// A virtual display has no window manager to focus anything, so without
+	// Emulation.setFocusEmulationEnabled this comes back false while the page
+	// is visible and being clicked — a state no one at a keyboard produces.
+	if !fp.HasFocus {
+		t.Error("document.hasFocus() is false: the page is being driven without focus")
 	}
 	if fp.ScreenWidth != testScreenWidth || fp.ScreenHeight != testScreenHeight {
 		t.Errorf("screen is %dx%d, want %dx%d",
