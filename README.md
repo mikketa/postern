@@ -967,10 +967,21 @@ What postern does on its own:
   postern gives up and says the address is what is being refused, rather than spending the
   rest of the timeout and reporting "no token" as though the answers were wrong.
 
+**Identities without addresses are not identities.** The fleet was measured against the
+single profile it replaces, on the same connection, ten solves each: six identities that
+rotate, rest and warm themselves came back with **3 tokens**, against **4** for one profile
+hammered — the same number, given how noisy ten runs are. `serve` says so at startup when
+no identity has a proxy, and it is right: six profiles behind one address are one identity
+wearing six hats. The profile is not the unit of reputation. The address is.
+
+That is also the honest answer to how this compares with a commercial solver. Their edge is
+not a better model or a cleverer browser; it is thousands of residential addresses and the
+volume to keep each one lightly used. What is left to buy here is addresses, not code.
+
 What it cannot do for you, and there is no clever way around either:
 
 - **Where the requests come from.** A residential address is worth more than any
-  fingerprint work. `-proxy` takes one.
+  fingerprint work. `-proxy` takes one, and `-identities` takes one per line.
 - **How fast you ask.** Twenty-five solves in an evening from one address was enough to go
   from 3/5 to nothing, on a home connection. Spread the work, or spread the addresses.
 
