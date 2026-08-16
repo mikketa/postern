@@ -29,9 +29,9 @@ Measured, not asserted. Every row was run against the live service.
 | **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token**, and postern now says why: the vendor never rendered its frame |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **4/10 tokens**, 72–85s each, with `solver-vision.py` at 48/48 on the bench |
+| **reCAPTCHA v2 checkbox**, image challenge served | **10/10 tokens**, 21s median, with `solver-vision.py` at 48/48 on the bench |
+| Same, before the parked-panel fix | 4/10, 72–85s each |
 | Same, an earlier build of the same solver | 3/5, then 2/5 with `solver-yolos.py` an hour later |
-| Same, after ~25 solves from one address | **0/5** — see reputation, below |
 
 The last three rows deserve the detail rather than a footnote. When Google decides you are
 worth challenging, it puts up a grid of photographs. Postern drives that grid — finds it,
@@ -39,23 +39,20 @@ measures it, answers it in as many rounds as it takes, and submits — but the l
 delegated to a command you nominate. With no solver configured at all, it reports the
 challenge in about nine seconds rather than burning the timeout.
 
-Read those three rows together, because they are the honest shape of this. They fell from
-3/5 to 0/5 over an evening of testing from one home connection — and the builds in between
-differed only by fixes that should have helped, every one of them verified separately.
+Read those rows together, because the story they tell is not the one they were first written
+to tell. Token rates fell from 3/5 to 0/5 to 4/10 over an evening of testing from one home
+connection, and every explanation offered here for a long time was external: a worn address,
+a shallow profile, a reputation ceiling.
 
-Address and profile moved together across those runs, so that fall does not establish which
-of them did it, and a later check found a third candidate: on the runs that failed longest,
-the vision was demonstrably missing squares. Weigh the reputation section below with that in
-mind — it is a real effect, and it is not the only one.
+It was a bug. Between rounds reCAPTCHA parks its panel off screen, the panel's own document
+does not change when it happens, and postern was clicking anyway — at `y=-9448`, on nothing.
+The grids were answered correctly and the answers were thrown out of the window; the endless
+challenge that looked like an untrusted address was postern never submitting. Fixing it took
+the same address, the same evening, from 4/10 to **10/10**, six of them waved through after a
+single grid. The full trail is in "the control that should have been run first", below,
+because how the wrong conclusion survived so long is the more useful part.
 
-**With the vision at 48/48 on the bench, ten runs from that same address gave 4 tokens**, in
-72 to 85 seconds each; the six failures ran out the 2m30s timeout. The logs say what those
-six were and were not. In four of them Google never once said the answer was wrong — no
-"veuillez réessayer", no "select all matching images" — it simply kept serving grid after
-grid, eleven to fourteen of them, which is the treadmill an address gets when it is not
-trusted rather than a solver being marked wrong.
-
-The other two failed on the pictures, and both are the same shape of mistake — an object at
+Two earlier failures were genuine vision mistakes, and both are the same shape — an object at
 the edge of a square. One was a grid of cars noised almost to static, served four times
 over, where the solver ticked nothing: it does hold cars, a row of them parked along the
 bottom tenth of one tile, which took a median filter and a seven-fold enlargement before I
@@ -94,10 +91,15 @@ rounds is what a solver that misses one square looks like from the outside.
 That crossing is now scored 0.58. What changed was not the corpus — see below for the
 measurement that ruled it out — but which export of the encoder the head reads against.
 
-So the round count is a symptom, not a verdict, and it does not separate the two causes.
-Both produce it. What can be said is narrower: a run that answers everything finishes in six
-rounds and tends to get a token, and everything else — worn address, worn profile, a category
-the vision cannot do — arrives as more rounds.
+So the round count is a symptom, not a verdict, and it does not separate the causes. A third
+one turned out to be underneath most of it: a submitted answer that never arrived, because
+the click was aimed at a panel reCAPTCHA had parked off screen. That is why runs piled up
+rounds without ever being told they were wrong — nothing had been said. With it fixed, ten
+consecutive runs took a median of one round and every one produced a token.
+
+What survives of this table is narrower than it looked: a run that answers everything *and
+manages to submit it* finishes in one or two rounds. Everything else arrives as more rounds,
+and "more rounds" was never evidence about the address.
 
 This is also why campaigns run back to back are not comparable. After an hour of solving
 from one address, the same build is served more rounds than it was at the start. Comparing
@@ -1056,12 +1058,33 @@ carries its own widget beside the one postern renders, `find(f => f.src === url)
 returned a parked frame roughly a quarter of the time, and that round's clicks were dispatched
 nine thousand pixels above the window.
 
-The fix is to prefer a candidate that is actually on screen and not hidden, falling back to
-the first when they are all parked — between rounds they are. `TestHostPositionPrefersThe`
-`DeployedFrame` pins it with the measured numbers: without the fix it answers `1,-9999`.
+Preferring a candidate that is on screen fixed the frame *choice* and moved the number very
+little, because the deeper mistake was next to it: the panel's own document is **identical
+whether or not it is parked**. It reports its tiles, its button and a 580-pixel `innerHeight`
+from the inside either way — none of that changes when reCAPTCHA moves the iframe holding it
+to `y=-9999` between rounds. `Open()` asked only the inside, so postern went on clicking a
+panel that had been put away.
 
-This is also why the panel never photographed: the same wrong origin is what the screenshot
-is cropped to, so it came back blank and got reconstructed from the DOM instead.
+So the two questions are now separated. `hasPanel` is what the document says about itself and
+decides whether the frame is worth measuring again; `Open` is that **and** an outside
+measurement saying the element is on screen. Nothing is clicked unless both agree.
+
+This is also why the panel never photographed: the screenshot is clipped to the same origin,
+so it came back blank and got reconstructed from the DOM instead.
+
+**Measured, ten solves back to back on one fresh profile, same address and same evening as
+the 4/10 above:**
+
+| | before | after |
+| --- | --- | --- |
+| tokens | 4/10 | **10/10** |
+| clicks dispatched off screen | 6 in one run | **0 in ten** |
+| challenges per token | 6 or more | **1** (median; 5 at worst) |
+| time to a token | 72–85s | **21s** (median) |
+
+Six of the ten were waved through after a single grid, which is what the stock-Chrome control
+gets. The endless challenge was never Google refusing this address: it was postern answering
+correctly and throwing the answer nine thousand pixels above the window.
 
 Two smaller defects fell out of the same session: `-display host` starts Chrome without
 `--ozone-platform=x11`, so it tries Wayland and dies where there is no compositor; and
