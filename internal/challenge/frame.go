@@ -158,12 +158,13 @@ const hostFrameScript = `(url => {
   });
 
   // Falling back to the first candidate rather than to nothing: between rounds
-  // every bframe is parked, and a stale origin beats no panel at all.
+  // every bframe is parked, and the caller wants to be told that rather than
+  // handed an error.
   const frame = deployed[0] || candidates[0];
   if (!frame) return null;
 
   const r = frame.getBoundingClientRect();
-  return { x: r.x, y: r.y };
+  return { x: r.x, y: r.y, deployed: deployed.length > 0 };
 })(%q)`
 
 // Box is a rectangle in the challenge document's own coordinates, which are
@@ -277,8 +278,18 @@ type Frame struct {
 
 	// locate re-measures where the frame sits, because it moves: reCAPTCHA
 	// slides the panel in and out and a position taken one round ago is not
-	// where the tiles are now.
-	locate func(context.Context) (float64, float64, error)
+	// where the tiles are now. It also reports whether the frame was on screen
+	// at all, which the panel's own document cannot tell us.
+	locate func(context.Context) (float64, float64, bool, error)
+
+	// Parked records that the frame's element was off screen when it was last
+	// measured. It is not the same question as whether the panel is open, and
+	// the difference cost every click of a round: a parked panel still reports
+	// its tiles, its button and a 580-pixel innerHeight from the inside, because
+	// none of that changes when reCAPTCHA moves the iframe to y=-9999 between
+	// rounds. Aiming at it from the outside then sends the pointer nine thousand
+	// pixels above the window, where the click lands on nothing at all.
+	Parked bool
 
 	// OriginX, OriginY place the frame's top-left corner in the viewport, so
 	// that a box read from inside can be aimed at from outside.
@@ -439,16 +450,16 @@ func findLocal(outer context.Context) (*Frame, error) {
 	// to never answer — and a solve that blocks on it sits there until the
 	// whole run times out.
 	url := view.URL
-	locate := func(ctx context.Context) (float64, float64, error) {
+	locate := func(ctx context.Context) (float64, float64, bool, error) {
 		return hostPosition(ctx, url)
 	}
 
-	x, y, err := locate(outer)
+	x, y, deployed, err := locate(outer)
 	if err != nil {
 		return nil, nil
 	}
 	return &Frame{runCtx: outer, world: world, locate: locate,
-		OriginX: x, OriginY: y, View: view}, nil
+		OriginX: x, OriginY: y, Parked: !deployed, View: view}, nil
 }
 
 // findAttached looks through the browser's targets, which is where a frame in
@@ -492,16 +503,16 @@ func (f *Finder) findAttached(ctx context.Context) (*Frame, error) {
 		}
 
 		url := info.URL
-		locate := func(ctx context.Context) (float64, float64, error) {
+		locate := func(ctx context.Context) (float64, float64, bool, error) {
 			return hostPosition(ctx, url)
 		}
 
-		x, y, err := locate(ctx)
+		x, y, deployed, err := locate(ctx)
 		if err != nil {
 			continue
 		}
 		return &Frame{runCtx: session.ctx, world: session.world, locate: locate,
-			OriginX: x, OriginY: y, View: view}, nil
+			OriginX: x, OriginY: y, Parked: !deployed, View: view}, nil
 	}
 	return nil, nil
 }
@@ -556,6 +567,17 @@ func readIn(ctx context.Context, session *attachment) (View, error) {
 
 // Open reports whether the panel is still showing a challenge.
 func (f *Frame) Open() bool {
+	return f.hasPanel() && !f.Parked
+}
+
+// hasPanel is what the panel says about itself from the inside: tiles laid out
+// in a document tall enough to be a challenge rather than a collapsed stub.
+//
+// Kept apart from Open because the two disagree exactly when it matters. A
+// panel reCAPTCHA has parked off screen still answers yes here — the document
+// is unchanged, only the iframe holding it moved — and acting on that answer is
+// how clicks end up dispatched above the window.
+func (f *Frame) hasPanel() bool {
 	return len(f.View.Tiles) > 0 && f.View.Height >= minPanelHeight
 }
 
@@ -614,15 +636,19 @@ func (f *Frame) Reread(ctx context.Context) error {
 	}
 	f.View = view
 
-	if !f.Open() {
+	// Measured on hasPanel, not Open: a frame that was parked last time has to
+	// be looked at again, or it stays parked in postern's mind for the rest of
+	// the run and the panel is never acted on again.
+	if !f.hasPanel() {
+		f.Parked = false
 		return nil
 	}
 
-	x, y, err := f.locate(ctx)
+	x, y, deployed, err := f.locate(ctx)
 	if err != nil {
 		return fmt.Errorf("challenge: relocate panel: %w", err)
 	}
-	f.OriginX, f.OriginY = x, y
+	f.OriginX, f.OriginY, f.Parked = x, y, !deployed
 	return nil
 }
 
@@ -668,15 +694,19 @@ func readWorld(ctx context.Context, world runtime.ExecutionContextID) (View, err
 }
 
 // hostPosition finds the frame's element in the host page by its address.
-func hostPosition(ctx context.Context, url string) (float64, float64, error) {
-	var box *Box
+func hostPosition(ctx context.Context, url string) (float64, float64, bool, error) {
+	var found *struct {
+		X        float64 `json:"x"`
+		Y        float64 `json:"y"`
+		Deployed bool    `json:"deployed"`
+	}
 
 	script := fmt.Sprintf(hostFrameScript, frameMarker, url)
-	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &box)); err != nil {
-		return 0, 0, err
+	if err := chromedp.Run(ctx, chromedp.Evaluate(script, &found)); err != nil {
+		return 0, 0, false, err
 	}
-	if box == nil {
-		return 0, 0, fmt.Errorf("no element in the page holds %s", frameMarker)
+	if found == nil {
+		return 0, 0, false, fmt.Errorf("no element in the page holds %s", frameMarker)
 	}
-	return box.X, box.Y, nil
+	return found.X, found.Y, found.Deployed, nil
 }
