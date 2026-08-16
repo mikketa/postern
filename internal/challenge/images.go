@@ -865,7 +865,16 @@ func verify(ctx context.Context, frame *Frame, times *timings, log *slog.Logger)
 
 	if frame.View.Button.Hittable {
 		x, y := frame.View.Button.Center()
-		log.Debug("verify by pointer", "label", frame.View.Button.Label)
+
+		// Guarded because the reading costs a round trip to the page, and this
+		// is the one place a misaimed click can be caught before it is thrown.
+		if log.Enabled(ctx, slog.LevelDebug) {
+			vx, vy := frame.Point(x, y)
+			log.Debug("verify by pointer", "label", frame.View.Button.Label,
+				"origin", fmt.Sprintf("%.0f,%.0f", frame.OriginX, frame.OriginY),
+				"viewport", fmt.Sprintf("%.0f,%.0f", vx, vy),
+				"under", frame.UnderPoint(ctx, vx, vy))
+		}
 
 		before := frame.View.Pictures()
 		if err := click(ctx, frame, x, y); err != nil {
