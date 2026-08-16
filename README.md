@@ -149,6 +149,25 @@ day, where every arm is at the floor, so it says nothing about a warm profile on
 address. What can be said is narrower and worth saying anyway: the profile now keeps what a
 profile is supposed to keep, which it demonstrably did not before.
 
+**Warming is the expensive part, by two orders of magnitude.** Measured through a counting
+proxy — the total both ways through the tunnel, which is what a metered provider bills:
+
+| | traffic |
+|---|---|
+| Chrome itself, fresh profile, one trivial page | 0.1 MB |
+| One full solve attempt, run to a 2m30 timeout | **1.1 MB** |
+| `warm` over four google.com pages | 42.9 MB |
+| `warm` over youtube.com | 6.4 MB |
+| `warm` over an 18-page list | **99.8 MB** |
+
+So a browser is not what costs bandwidth here, and neither is solving: an entire attempt
+that ground through grid after grid until it timed out cost about a hundredth of warming
+the profile that made it. Chrome's own startup is negligible — the whole bill is the pages
+you choose. Search pages are the heaviest thing on that list at roughly 10 MB each, and
+also the ones that matter most for a Google challenge, so the trade is real rather than
+free: warming on two Google pages instead of eighteen mixed ones costs a fifth as much and
+leaves the cookies that count. Pick the list with the meter in mind if there is one.
+
 Turnstile, by contrast, is solved reliably, including in its managed mode.
 
 ## Running it at volume
