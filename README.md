@@ -42,7 +42,6 @@ Every row was run against the live service. Nothing here is an estimate.
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v3** | token, ~4s |
-| **Turnstile**, dummy `3x…FF` (forces an interactive challenge) | **no token** — and postern says why: the vendor never rendered its frame |
 
 The image-challenge row needs a vision model, which postern does not ship. That number is
 with `examples/solver-vision.py`.
@@ -236,13 +235,12 @@ the target.
 ## Testing
 
 Cloudflare publishes dummy keys that work from any domain, including localhost:
-`1x00000000000000000000AA` always passes, `2x00000000000000000000AB` always fails,
-`3x00000000000000000000FF` forces an interactive challenge.
+`1x00000000000000000000AA` always passes and `2x00000000000000000000AB` always fails.
 
 > [!NOTE]
-> Dummy keys return a fixed `XXXX.DUMMY.TOKEN.XXXX` with no risk analysis behind it, and
-> they render no iframe. They prove the plumbing works. They say nothing about a production
-> sitekey — which is why the table at the top was measured against one.
+> Dummy keys return a fixed `XXXX.DUMMY.TOKEN.XXXX` with no risk analysis behind it. They
+> prove the plumbing works and nothing else, which is why the table at the top was measured
+> against a production sitekey.
 
 ```sh
 go test -short ./...   # no browser
@@ -260,24 +258,31 @@ user is a better idea than root. Two things a server takes back:
 - **Datacenter IPs carry their own reputation.** Expect challenges more often, and harder,
   than from a residential connection. `-proxy` exists for this.
 
-## Reputation, and the bug that was blamed on it
+## Reputation
 
-For a long time this README said the ceiling was the address: worn IP, worn profile, a
-reputation you cannot manufacture. That was wrong, and finding out took building the
-control that should have been run first — a stock Chrome, on the same connection, clicked
-by hand. It got **6 tokens out of 6** where postern was getting 4 out of 10.
+One solve is a browser problem. The hundredth is a reputation problem: the same code that
+gets a token in the evening gets none at midnight from the same address. Postern has three
+answers to that, and they are what makes it hold up over a run rather than over a demo.
 
-It was a bug. Between rounds reCAPTCHA parks its panel off screen, the panel's own document
-does not change when it happens, and postern was clicking anyway — at `y=-9448`, on
-nothing. The grids were answered correctly and the answers were thrown out of the window.
-Fixing it took the same address, the same evening, from **4/10 to 10/10**.
+**A profile that ages.** Kept across runs and closed properly on the way out, so it keeps
+what a profile is supposed to keep. `postern warm -pages sites.txt` takes it browsing, on a
+schedule rather than in front of every token.
+
+**A way out that isn't yours.** `-proxy` takes one, password included. Chrome drops proxy
+credentials given on the command line and raises a sign-in dialog nobody is there to
+answer, so postern strips them off the flag — which also keeps them out of a world-readable
+`/proc` — and signs in over CDP instead.
+
+**A fleet instead of an identity.** Rest, quarantine and memory, as above.
 
 > [!IMPORTANT]
-> Reputation is still real — address and pacing decide more than any fingerprint work. But
-> before blaming it, check that your own clicks are landing.
+> Before blaming reputation, check that your own clicks are landing. One evening went from
+> 4 tokens in 10 to **10 in 10** on the same address the moment a misaimed click was found:
+> the grids had been answered correctly all along, and the answers were being dispatched off
+> screen.
 
-**[The whole trail →](docs/reputation.md)** — what the fleet measured, what the control
-proved, and how a wrong conclusion survived a day of careful measurement.
+**[The whole trail →](docs/reputation.md)** — what the fleet measured, what a stock-Chrome
+control proved, and how a wrong conclusion survived a day of careful measurement.
 
 ## Scope
 
