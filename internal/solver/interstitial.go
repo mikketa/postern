@@ -1,0 +1,238 @@
+package solver
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/chromedp/chromedp"
+
+	"github.com/mikketa/postern/internal/input"
+)
+
+// A site can sit behind a challenge of its own rather than carrying a widget in
+// a form: Cloudflare's managed challenge answers every request with an
+// interstitial page and only serves the site once that page is satisfied. It is
+// not the same product as the widget postern renders — it is stricter, it is
+// decided per request, and until it is crossed there is no target page to put a
+// widget on at all.
+//
+// Crossing it is one click, and finding where to click is the whole problem:
+// the widget lives in a closed shadow root, so it has no iframe to look for, no
+// element to query and nothing to read. What the page does expose is the
+// element the shadow root hangs off — and that element gives itself away by
+// occupying the space of a widget while containing not one character of text.
+//
+// This cost most of a night to find because the obvious instrument lies:
+// document.querySelectorAll('iframe') returns zero on a page that is displaying
+// the checkbox perfectly well, which reads exactly like a challenge refusing to
+// render. It is not. Measure this one on the screen, never through the DOM.
+
+const (
+	// interstitialBudget is how long to spend on the whole crossing. Measured
+	// on a live managed challenge: the click is accepted at once, the widget
+	// spins for four to eight seconds, and the page it was hiding arrives
+	// inside fifteen.
+	interstitialBudget = 45 * time.Second
+
+	// verdictWait is how long one click is given before another aim is tried.
+	// A refused challenge puts its checkbox back after about sixteen seconds,
+	// which is the slowest honest answer there is.
+	verdictWait = 18 * time.Second
+
+	// settleBeforeClick is how long the widget is given between being drawn and
+	// being clicked. It is drawn before it is listening: measured over twelve
+	// crossings, the first click was ignored every single time and the second
+	// crossed in 1.8s — with the coordinates swapped between runs, so it was
+	// never the aim. Waiting here costs three seconds; not waiting costs the
+	// eighteen it takes to tell an ignored click from a refused one.
+	settleBeforeClick = 3 * time.Second
+
+	// checkboxInset is where the checkbox sits from the left edge of the
+	// element hosting the shadow root, in CSS pixels — the same thirty as the
+	// widget postern renders itself, which is worth knowing: the interstitial
+	// is a different product but it draws the same checkbox in the same place.
+	//
+	// Measured, and the measurement is the point: reading the offset off a
+	// screenshot by eye gave 41, every crossing then took two clicks and
+	// eighteen seconds of waiting out the first, and 30 crossed in 1.8s every
+	// time. The alternates stay because an inset is a layout detail, but the
+	// vendor's own number goes first.
+	checkboxInset = 30
+
+	// widgetWait is how long the checkbox is given to be drawn. The challenge
+	// page arrives before the script that draws its widget, and a run that
+	// asked once and gave up sat out the whole budget in front of a checkbox
+	// that appeared a second later.
+	widgetWait = 12 * time.Second
+)
+
+var checkboxAlternates = []float64{checkboxInset, checkboxInset, 41, 55}
+
+// interstitialScript reports whether this page is a challenge rather than the
+// site, and where its checkbox is.
+//
+// The challenge platform script is the tell. A title in the local language is
+// not — "Un instant…", "Just a moment...", one per language Cloudflare speaks —
+// and neither is any id or class on the page: they are regenerated per request
+// (`div#mZiFs3` on one load, something else on the next).
+const interstitialScript = `(() => {
+  if (!document.querySelector('script[src*="/cdn-cgi/challenge-platform/"]')) {
+    return JSON.stringify({ challenge: false });
+  }
+
+  // The host of a closed shadow root cannot be recognised by what is inside it
+  // — nothing can see inside — but by the absence of anything: a box the size
+  // of a widget carrying no text at all. Its wrappers share its box to the
+  // pixel, so the deepest one, which is the last in document order, is the one.
+  const hosts = [...document.querySelectorAll('body *')].filter(el => {
+    if (el.textContent.trim()) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 150 && r.height >= 40 && r.height <= 120;
+  });
+  if (!hosts.length) return JSON.stringify({ challenge: true });
+
+  const r = hosts[hosts.length - 1].getBoundingClientRect();
+  return JSON.stringify({ challenge: true, x: r.x, y: r.y, w: r.width, h: r.height });
+})()`
+
+// interstitial is what the page said about itself.
+type interstitial struct {
+	Challenge bool    `json:"challenge"`
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	W         float64 `json:"w"`
+	H         float64 `json:"h"`
+}
+
+// look asks the page whether it is a challenge and where its checkbox is.
+func look(ctx context.Context) (interstitial, error) {
+	var raw string
+	if err := chromedp.Run(ctx, chromedp.Evaluate(interstitialScript, &raw)); err != nil {
+		// Mid-navigation, or no document yet. Not a challenge, and not a
+		// failure worth ending a solve over.
+		return interstitial{}, nil
+	}
+
+	var page interstitial
+	if err := json.Unmarshal([]byte(raw), &page); err != nil {
+		return interstitial{}, fmt.Errorf("solver: read interstitial: %w", err)
+	}
+	return page, nil
+}
+
+// cross gets past a challenge standing between us and the target page. It
+// returns with the site loaded, or with an error naming what it was still
+// looking at.
+//
+// A page that is not a challenge returns immediately, which is every page on
+// every site that does not do this.
+func cross(ctx context.Context, log *slog.Logger) error {
+	page, err := look(ctx)
+	if err != nil {
+		return err
+	}
+	if !page.Challenge {
+		return nil
+	}
+
+	// The checkbox is not on screen the instant the challenge page is: it is
+	// drawn by a script that has to arrive first. Measured, a run that asked
+	// once and immediately concluded there was nothing to click sat out the
+	// whole budget in front of a widget that appeared a second later.
+	for waited := time.Duration(0); page.W == 0 && waited < widgetWait; waited += 500 * time.Millisecond {
+		if err := input.Pause(ctx, 500, 500); err != nil {
+			return err
+		}
+		if page, err = look(ctx); err != nil {
+			return err
+		}
+		if !page.Challenge {
+			return nil
+		}
+	}
+
+	if page.W == 0 {
+		// A challenge that solves itself without asking. It has nothing on
+		// screen to click, so the only thing to do is let it finish.
+		log.Info("a challenge stands in front of the page, with nothing to click")
+		return settle(ctx, log)
+	}
+
+	// The widget is on screen; that does not mean it is listening yet.
+	if err := input.Pause(ctx, int(settleBeforeClick.Milliseconds()),
+		int(settleBeforeClick.Milliseconds())); err != nil {
+		return err
+	}
+
+	// The aim is kept, only the inset varies, and the vendor's own thirty goes
+	// first. Looking again between attempts was worse than useless: with the
+	// widget mid-redraw the same rule picks some other empty box on the page,
+	// and a measured run spent its third attempt clicking at 55,181 — the
+	// corner of the header, nowhere near a challenge.
+	deadline := time.Now().Add(interstitialBudget)
+	for _, inset := range checkboxAlternates {
+		if time.Now().After(deadline) {
+			break
+		}
+
+		target := input.Point{X: page.X + inset, Y: page.Y + page.H/2}
+		// Come from outside the widget, so the pointer covers real ground
+		// rather than materialising on what it is about to click.
+		from := input.Point{X: page.X + page.W + 160, Y: page.Y + page.H + 140}
+
+		log.Info("crossing the challenge in front of the page",
+			"at", fmt.Sprintf("%.0f,%.0f", target.X, target.Y))
+		if err := chromedp.Run(ctx, input.Click(from, target)); err != nil {
+			return fmt.Errorf("solver: click the challenge: %w", err)
+		}
+
+		crossed, err := waitOut(ctx, verdictWait)
+		if err != nil {
+			return err
+		}
+		if crossed {
+			log.Info("the challenge let us through")
+			return nil
+		}
+	}
+
+	return fmt.Errorf("solver: the challenge in front of the page never let us through — " +
+		"it took the click and put its checkbox back, which is the challenge refusing " +
+		"this browser or this address rather than missing the click. A residential " +
+		"address is the lever here; measured, the same code crossed on the first click " +
+		"from another one")
+}
+
+// settle waits for a challenge to finish deciding on its own.
+func settle(ctx context.Context, log *slog.Logger) error {
+	crossed, err := waitOut(ctx, interstitialBudget)
+	if err != nil {
+		return err
+	}
+	if !crossed {
+		return fmt.Errorf("solver: a challenge in front of the page never resolved")
+	}
+	log.Info("the challenge let us through")
+	return nil
+}
+
+// waitOut reports whether the challenge is gone before the budget runs out.
+func waitOut(ctx context.Context, budget time.Duration) (bool, error) {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if err := input.Pause(ctx, 500, 500); err != nil {
+			return false, err
+		}
+		page, err := look(ctx)
+		if err != nil {
+			return false, err
+		}
+		if !page.Challenge {
+			return true, nil
+		}
+	}
+	return false, nil
+}
