@@ -42,6 +42,7 @@ Every row was run against the live service. Nothing here is an estimate.
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v3** | token, ~4s |
+| **Cloudflare managed challenge** in front of a site | **5/6 crossed**, then the page's own widget solved |
 
 The image-challenge row needs a vision model, which postern does not ship. That number is
 with `examples/solver-vision.py`.
@@ -215,6 +216,12 @@ shows nothing on screen either.
 **The widget is ours.** Postern renders a fresh widget with the site's key rather than
 hunting for the one on the page. Sites lay out their forms a hundred ways; the widget APIs
 are identical everywhere.
+
+**A site can answer with a challenge instead of itself.** Cloudflare's managed challenge
+holds every request behind an interstitial, so there is no page to put a widget on until
+that is crossed. Postern crosses it before it does anything else. The checkbox there lives
+in a closed shadow root — no iframe, nothing readable — so it is found by the one thing it
+cannot hide: it fills the space of a widget while holding no text at all.
 
 **The pointer is real.** The checkbox lives in a cross-origin iframe nothing on the page
 can reach into, so postern clicks it from the outside — pointer events over CDP, so the
