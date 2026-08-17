@@ -38,7 +38,7 @@ Every row was run against the live service. Nothing here is an estimate.
 | --- | --- |
 | **Turnstile**, production sitekey, managed mode | **5/5 tokens**, ~3s each |
 | Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens**, 13.7s total, median 4s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **10/10 tokens**, 21s median |
+| **reCAPTCHA v2 checkbox**, image challenge served | **8/8 tokens**, 16s median |
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v3** | token, ~4s |
