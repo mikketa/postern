@@ -321,6 +321,7 @@ the target.
 | `-image-solver` | none | Command that answers picture grids |
 | `-save-panels` | none | Directory to keep every grid in, to calibrate a solver against later |
 | `-timeout` | `60s` | Give up after this long — the whole solve, crossing included |
+| `-v` | `false` | Report what the challenge did, on stderr — clicks, rounds, why a run ended |
 
 **`postern serve`** — the same, over HTTP.
 
