@@ -14,7 +14,18 @@
 <p align="center">
   <a href="https://github.com/mikketa/postern/actions/workflows/ci.yml"><img src="https://github.com/mikketa/postern/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
   <img src="https://img.shields.io/badge/go-1.26%2B-00ADD8" alt="go 1.26+">
+  <img src="https://img.shields.io/badge/vendors-turnstile%20%C2%B7%20recaptcha-6b7280" alt="turnstile and recaptcha">
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
+</p>
+
+<p align="center">
+  <a href="#what-works">What works</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#use-it">Use it</a> ·
+  <a href="#picture-challenges">Picture challenges</a> ·
+  <a href="#running-it-at-volume">At volume</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#flags">Flags</a>
 </p>
 
 ```console
@@ -30,22 +41,46 @@ at, renders the widget itself, and hands back the token.
 > A postern is the small side door of a fortress — the one you walk through instead of
 > attacking the wall.
 
+<br>
+
 ## What works
 
 Every row was run against the live service. Nothing here is an estimate.
 
-| Challenge | Result |
-| --- | --- |
-| **Turnstile**, production sitekey, managed mode | **5/5 tokens**, ~3s each |
-| Same, through `serve`, 10 requests at concurrency 3 | **10/10 tokens**, 13.7s total, median 4s |
-| **reCAPTCHA v2 checkbox**, image challenge served | **6/6 tokens**, 11.5s median |
-| **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
-| **reCAPTCHA v2 invisible** | token, ~4s |
-| **reCAPTCHA v3** | token, ~4s |
-| **Cloudflare managed challenge** in front of a site | **6/8 crossed**, 13.3s, then the page's own widget solved |
+| Challenge | Result | Time |
+| :--- | :--- | :--- |
+| **Turnstile** — production sitekey, managed mode | **5 / 5** tokens | ~3s |
+| Same, through `serve` — 10 requests at concurrency 3 | **10 / 10** tokens | median 4s, 13.7s total |
+| **reCAPTCHA v2 checkbox** — image challenge served | **6 / 6** tokens | median 11.5s |
+| **reCAPTCHA v2 checkbox** — no challenge served | token | ~5s |
+| **reCAPTCHA v2 invisible** | token | ~4s |
+| **reCAPTCHA v3** | token | ~4s |
+| **Cloudflare managed challenge** in front of a site | **6 / 8** crossed | 13.3s, then the page's own widget |
 
-The image-challenge row needs a vision model, which postern does not ship. That number is
-with `examples/solver-vision.py`.
+<sup>Measured between 2026-08-11 and 2026-08-15. Five runs is five runs, not a rate — read the
+denominators.</sup>
+
+> [!IMPORTANT]
+> **Your address will move these numbers more than any change to postern.** The Cloudflare
+> row was measured through a datacenter exit; through a commercial VPN exit the same code,
+> at the same minute, was refused every single time. The reCAPTCHA rows come from an
+> ordinary residential connection with a profile that had been used before. Treat the table
+> as evidence that the mechanics work, not as a rate you will reproduce.
+
+### What it does not do
+
+| | |
+| --- | --- |
+| **hCaptcha** | Not implemented. It is not one challenge but a family — a 3×3 grid, click-the-object, and drag-and-drop — and it escalates by risk score, so the tier a test sitekey serves is not the tier a real site serves |
+| **FunCaptcha / Arkose** | Not implemented. Rotating 3D tasks that change on their own schedule |
+| **GeeTest** | Not implemented. The slider needs a drag, which `internal/input` cannot do yet |
+| **Text and audio captchas** | Out of scope. reCAPTCHA's audio challenge is refused by Google outright as an automated request |
+
+The missing primitive behind two of those is a drag: `internal/input` can click and move,
+never press-move-release. It is a small piece of work on top of the curved path that is
+already there, and it is the next thing worth building.
+
+<br>
 
 ## Install
 
@@ -55,6 +90,8 @@ go install github.com/mikketa/postern/cmd/postern@latest
 
 You also need **Chrome or Chromium**, and **Xvfb** unless you pass `-display host` or
 `-headless` (`xorg-server-xvfb` on Arch, `xvfb` on Debian).
+
+<br>
 
 ## Use it
 
@@ -88,7 +125,7 @@ curl -s localhost:8099/solve -d '{
 ```
 
 | Field | Type | Required | Notes |
-| --- | --- | --- | --- |
+| :--- | :--- | :---: | :--- |
 | `url` | string | yes | The page the widget belongs to — it decides the origin |
 | `sitekey` | string | yes | Found in the target page markup |
 | `kind` | string | no | As above. Defaults to `turnstile` |
@@ -96,12 +133,15 @@ curl -s localhost:8099/solve -d '{
 | `cdata` | string | no | Turnstile only |
 | `timeout_ms` | int | no | Overrides the server default for this request |
 
-Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. `GET /health` returns
-`{"status": "ok"}`.
+Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. A fleet with nothing
+rested returns **`503` with `Retry-After`**. `GET /health` returns `{"status": "ok"}`, and
+`GET /fleet` reports what each identity has done.
 
 > [!WARNING]
 > `serve` binds to localhost and has **no authentication**. Keep it on localhost, or put
 > something in front of it.
+
+<br>
 
 ## Picture challenges
 
@@ -118,7 +158,7 @@ postern solve -kind recaptcha-v2 -url ... -sitekey ... \
 The protocol is deliberately dumb. A solver is a twenty-line script:
 
 | | |
-| --- | --- |
+| :--- | :--- |
 | **argv** | path to a PNG of the panel, prompt included |
 | **stdout** | one `x,y` per line, in pixels within that image; nothing means nothing to click |
 | **exit 0** | answered |
@@ -130,7 +170,20 @@ environment, read out of the challenge document itself rather than guessed from 
 screenshot. A solver may ignore all three.
 
 Three examples ship with it: `solver-template.py` to build on, `solver-yolos.py` (a plain
-detector), and `solver-vision.py`, which scores **48 of 48** grids on the bench.
+detector), and `solver-vision.py`.
+
+### How good is `solver-vision.py`
+
+| | Grids answered exactly |
+| :--- | :--- |
+| On the 48-grid bench it was tuned against | **48 / 48** |
+| The same solver under cross-validation | **45 / 48** |
+| Installed without `-export` (two models not exported locally) | **38 / 48** |
+
+**45 of 48 is the honest number.** A bench a solver was fitted on cannot also grade it, so
+every knob was refit with the grid it fixes held out — one that scored an extra grid did
+not survive that and was thrown away. The 6/6 row in the table at the top used the
+`-export` install.
 
 One process per grid is the right protocol for a twenty-line script and the wrong one for
 600MB of models, so `solver-vision.py` keeps a copy of itself resident and answers over a
@@ -139,12 +192,14 @@ that takes a PNG and prints coordinates.
 
 > [!TIP]
 > `examples/install-vision.sh -export` sets up `solver-vision.py` and its models in one
-> command. Without `-export` you get a working install that scores 38 of 48 — the two
-> models that close the gap have to be exported locally.
+> command. Without `-export` you get a working install at 38 of 48 — the two models that
+> close the gap have to be exported on your machine.
 
 **[Read the long version →](docs/picture-challenges.md)** — why a detector alone is not
 enough, why CLIP alone is worse, how the trained head was fitted, and every idea that was
 measured and thrown away.
+
+<br>
 
 ## Running it at volume
 
@@ -166,7 +221,7 @@ Adding an identity is adding a line. Its profile is created next to the others, 
 takes itself browsing once before its first solve. Three rules do the work:
 
 | | |
-| --- | --- |
+| :--- | :--- |
 | **Rest** | every identity waits a few minutes after a solve, spread so the fleet does not solve on one beat |
 | **Quarantine** | three failures in a row sets an identity aside for the best part of an hour |
 | **Memory** | how each identity has done is written to disk, so a restart does not hand a worn one a clean slate |
@@ -186,21 +241,32 @@ profile burnt.
 > several with no proxy at all share this machine's address. Postern says so at startup,
 > because both configurations quietly defeat the whole exercise.
 
+<br>
+
 ## How it works
 
-```
-postern                                  Chrome — real binary, real window, virtual screen
-   │                                       │
-   │  1. navigate to the target page ─────►│   the origin the vendor sees is the real one
-   │  2. add our own widget to it ────────►│   the vendor's api.js, our sitekey
-   │  3. click, if nothing happens ───────►│   trusted pointer events, curved path
-   │  4. poll window.__postern ◄───────────│   the widget callback parks the token there
-   │                                       │
-   ▼
- token
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as postern
+    participant C as Chrome
+    participant S as the site
+
+    Note over C: real binary, real window, virtual screen
+    P->>C: navigate to the target page
+    C->>S: request, from the real origin
+    S-->>C: the site, or a challenge standing in front of it
+    opt a challenge answered instead of the site
+        P->>C: find the checkbox, click it, wait it out
+        Note over P,S: closed shadow root, so there is nothing to query
+    end
+    P->>C: render our own widget, with the site's key
+    P->>C: click it, if it needs clicking
+    Note over P,C: trusted pointer events over CDP, on a curved path
+    C-->>P: the widget parks its token on window.__postern
 ```
 
-Four decisions carry the whole thing.
+Five decisions carry the whole thing.
 
 **The browser is genuine.** The real binary, launched without the automation banner,
 reusing the same profile every run so it ages like a person's — and closed properly on the
@@ -228,26 +294,75 @@ can reach into, so postern clicks it from the outside — pointer events over CD
 page sees `isTrusted`, on a curved path with easing and jitter rather than teleporting onto
 the target.
 
+<br>
+
 ## Flags
 
+**Browser** — every command takes these.
+
 | Flag | Default | Meaning |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | `-profile` | `~/.config/postern/profile` | Chrome profile directory, reused across runs |
 | `-display` | `virtual` | `virtual` starts an Xvfb of our own; `host` uses your session and is visible |
 | `-headless` | `false` | Headless mode. Measurably more detectable — see above |
 | `-screen` | `1920x1080` | Virtual screen size, `WxH`. The window is sized from it |
 | `-chrome` | autodetect | Path to the Chrome binary |
 | `-proxy` | none | Go out through this proxy; `user:pass@` is answered over CDP, not passed to Chrome |
+
+**`postern solve`** — one token, to stdout.
+
+| Flag | Default | Meaning |
+| :--- | :--- | :--- |
+| `-url` | *required* | The page the widget belongs to |
+| `-sitekey` | *required* | As found in the target page markup |
+| `-kind` | `turnstile` | `turnstile`, `recaptcha-v2`, `recaptcha-v2-invisible`, `recaptcha-v3` |
+| `-action` | none | Turnstile and reCAPTCHA v3, if the site sets one |
+| `-cdata` | none | Turnstile `cData`, if the site sets one |
 | `-image-solver` | none | Command that answers picture grids |
 | `-save-panels` | none | Directory to keep every grid in, to calibrate a solver against later |
-| `-timeout` | `60s` | Give up on a challenge after this long |
-| `-concurrency` | `2` | *(serve)* solves running at the same time |
-| `-addr` | `127.0.0.1:8099` | *(serve)* listen address |
+| `-timeout` | `60s` | Give up after this long — the whole solve, crossing included |
+
+**`postern serve`** — the same, over HTTP.
+
+| Flag | Default | Meaning |
+| :--- | :--- | :--- |
+| `-addr` | `127.0.0.1:8099` | Listen address |
+| `-concurrency` | `2` | Solves running at the same time |
+| `-identities` | none | Fleet file, one identity per line — see [above](#running-it-at-volume) |
+| `-warm-pages` | none | Pages a new identity browses before its first solve |
+| `-image-solver` | none | As above |
+| `-timeout` | `60s` | Default per-solve timeout; `timeout_ms` overrides it per request |
+
+**`postern warm`** — take a profile browsing, away from a token.
+
+| Flag | Default | Meaning |
+| :--- | :--- | :--- |
+| `-pages` | *required* | File of ordinary pages to visit, one per line |
+| `-timeout` | `10m` | How long to spend browsing |
+
+> [!TIP]
+> **Raise `-timeout` for a site behind a managed challenge.** The crossing takes its budget
+> out of the same clock as the solve — about 13s when it goes well, and a good deal more
+> when a challenge refuses and another has to be asked for. Postern will not start a second
+> challenge it has no time to answer, and says which half of the run ran out.
+
+<br>
 
 ## Testing
 
 Cloudflare publishes dummy keys that work from any domain, including localhost:
-`1x00000000000000000000AA` always passes and `2x00000000000000000000AB` always fails.
+
+| Key | What it does |
+| :--- | :--- |
+| `1x00000000000000000000AA` | Always passes |
+| `2x00000000000000000000AB` | Always fails |
+| `3x00000000000000000000FF` | Forces an interactive challenge — and **never yields a token** |
+
+> [!CAUTION]
+> The third one is a trap worth knowing about. With that key Turnstile never renders its
+> iframe at all, so there is nothing to click and nothing to solve; postern says so instead
+> of timing out in silence. It is not a regression, and it was verified against an older
+> commit before this note was written.
 
 > [!NOTE]
 > Dummy keys return a fixed `XXXX.DUMMY.TOKEN.XXXX` with no risk analysis behind it. They
@@ -255,20 +370,25 @@ Cloudflare publishes dummy keys that work from any domain, including localhost:
 > against a production sitekey.
 
 ```sh
-go test -short ./...   # no browser
+go test -short ./...    # no browser
 go test ./internal/...  # launches Chrome
 ```
 
+<br>
+
 ## On a server
 
-Postern runs fine on a headless Linux box: Chrome, Xvfb, roughly 500MB of RAM. A dedicated
-user is a better idea than root. Two things a server takes back:
+Postern runs fine on a headless Linux box: Chrome, Xvfb, and about 500MB of RAM — that last
+figure is an estimate, unlike the table at the top. A dedicated user is a better idea than
+root. Two things a server takes back:
 
 - **No GPU means software rendering.** WebGL reports SwiftShader, which no desktop does.
   Faking the strings is not a fix — extensions, shader precision and raw speed keep giving
   it away.
 - **Datacenter IPs carry their own reputation.** Expect challenges more often, and harder,
   than from a residential connection. `-proxy` exists for this.
+
+<br>
 
 ## Reputation
 
@@ -296,6 +416,8 @@ answer, so postern strips them off the flag — which also keeps them out of a w
 **[The whole trail →](docs/reputation.md)** — what the fleet measured, what a stock-Chrome
 control proved, and how a wrong conclusion survived a day of careful measurement.
 
+<br>
+
 ## Scope
 
 Postern exists for automating things you are allowed to automate: your own sites, your own
@@ -305,6 +427,8 @@ how these challenges behave.
 > [!CAUTION]
 > Don't point it at services whose terms you have not read, and don't use it to hammer
 > someone else's infrastructure.
+
+<br>
 
 ## Contributing
 
@@ -323,6 +447,8 @@ bootstrap function that renders the widget. The solve loop does not change.
 
 And the house rule: **claims come with measurements**. If you improve the success rate, say
 against what, how many runs, and what it was before.
+
+<br>
 
 ## License
 
