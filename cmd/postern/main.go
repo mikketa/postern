@@ -325,10 +325,7 @@ func runServe(args []string) error {
 		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log)
 	}
 
-	srv := &http.Server{
-		Addr:    *addr,
-		Handler: handler.Handler(),
-	}
+	srv := newHTTPServer(*addr, handler.Handler(), *timeout)
 
 	errc := make(chan error, 1)
 	go func() {
@@ -413,4 +410,32 @@ func defaultProfileDir() string {
 		return filepath.Join(os.TempDir(), "postern-profile")
 	}
 	return filepath.Join(base, "postern", "profile")
+}
+
+// newHTTPServer wraps the handler in the limits a listening socket needs.
+//
+// Every field below defaults to no limit at all in net/http, which is fine for
+// a demo and wrong for anything reachable.
+func newHTTPServer(addr string, h http.Handler, timeout time.Duration) *http.Server {
+	return &http.Server{
+		Addr:    addr,
+		Handler: h,
+
+		// Without these a connection that never finishes sending its headers
+		// is held open for as long as it likes, and enough of them is all it
+		// takes. ReadHeaderTimeout is the one that matters most: it is the
+		// whole of the slow-headers attack. ReadTimeout can be short because a
+		// solve request is a handful of fields, capped at 64KB by the handler.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+
+		// WriteTimeout has to outlast the work, not the wire: it is measured
+		// from the end of the request headers, so anything shorter than the
+		// longest legal solve would cut the answer off mid-token. A request
+		// cannot ask for more than -timeout — see api.effectiveTimeout — so
+		// that, plus room to start a browser and write a reply, is the bound.
+		WriteTimeout: timeout + 30*time.Second,
+	}
 }
