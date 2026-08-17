@@ -131,15 +131,33 @@ curl -s localhost:8099/solve -d '{
 | `kind` | string | no | As above. Defaults to `turnstile` |
 | `action` | string | no | Turnstile and reCAPTCHA v3; must match what the site uses |
 | `cdata` | string | no | Turnstile only |
-| `timeout_ms` | int | no | Overrides the server default for this request |
+| `timeout_ms` | int | no | Lowers the server's timeout for this request. It cannot raise it |
 
 Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. A fleet with nothing
-rested returns **`503` with `Retry-After`**. `GET /health` returns `{"status": "ok"}`, and
+rested returns **`503` with `Retry-After`**. A body over 64KB is `413`, and a misspelt
+field is `400` rather than a silent default. `GET /health` returns `{"status": "ok"}`, and
 `GET /fleet` reports what each identity has done.
 
-> [!WARNING]
-> `serve` binds to localhost and has **no authentication**. Keep it on localhost, or put
-> something in front of it.
+### Authentication
+
+Set `POSTERN_TOKEN` and every route but the health check requires it:
+
+```sh
+POSTERN_TOKEN=$(openssl rand -hex 32) postern serve -addr 0.0.0.0:8099
+```
+
+```sh
+curl -s localhost:8099/solve -H "Authorization: Bearer $POSTERN_TOKEN" -d '{...}'
+```
+
+An environment variable rather than a flag, for the same reason proxy credentials are
+stripped off `-proxy`: a command line is readable by every user on the machine through
+`/proc`.
+
+> [!IMPORTANT]
+> **Without a token, `serve` refuses to bind to anything but loopback.** Not a warning —
+> a warning at startup is read once, on the day it is set up, and never again. `GET /fleet`
+> names every identity and whether it is proxied, and `POST /solve` spends the fleet.
 
 <br>
 
@@ -332,7 +350,10 @@ the target.
 | `-identities` | none | Fleet file, one identity per line — see [above](#running-it-at-volume) |
 | `-warm-pages` | none | Pages a new identity browses before its first solve |
 | `-image-solver` | none | As above |
-| `-timeout` | `60s` | Default per-solve timeout; `timeout_ms` overrides it per request |
+| `-timeout` | `60s` | Per-solve ceiling. `timeout_ms` may ask for less, never more |
+
+`serve` also reads **`POSTERN_TOKEN`** from the environment — see
+[Authentication](#authentication). Without it the server will only bind to loopback.
 
 **`postern warm`** — take a profile browsing, away from a token.
 
