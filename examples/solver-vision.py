@@ -35,16 +35,29 @@ than the challenge stays valid. Sentence embeddings are cached next to the model
 for the same reason — the text encoder is then loaded once ever, not once a
 round.
 
+Loading can be paid once rather than once a round. Set POSTERN_VISION_SOCKET and
+the first grid leaves a copy of this script resident with its models up; every
+grid after it is answered by that copy over a socket. Measured on one panel:
+1.17s to 0.56s for a 3x3, 1.76s to 1.21s for a 4x4. Postern is not involved and
+does not need to be — this stays a command that takes a PNG and prints
+coordinates, and if the copy cannot be started the work is done here as before.
+
 It is a starting point, not a ceiling. A larger CLIP, a fine-tune on captcha
 tiles, or a hosted vision model all plug in the same way — the protocol is a PNG
 in and coordinates out.
 """
 
+import contextlib
+import functools
 import hashlib
+import io
 import json
 import os
 import re
+import socket
+import subprocess
 import sys
+import time
 
 import numpy as np
 import onnxruntime as ort
@@ -322,12 +335,28 @@ def directory() -> str:
     return os.environ.get("POSTERN_CLIP_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 
-def session(name: str) -> ort.InferenceSession:
+@functools.lru_cache(maxsize=None)
+def loaded(folder: str, name: str) -> ort.InferenceSession:
     options = ort.SessionOptions()
     options.log_severity_level = 3
     return ort.InferenceSession(
-        os.path.join(directory(), name), options, providers=["CPUExecutionProvider"]
+        os.path.join(folder, name), options, providers=["CPUExecutionProvider"]
     )
+
+
+def session(name: str) -> ort.InferenceSession:
+    """A model, loaded once per directory and kept.
+
+    Keeping it matters only to the resident mode below, and there it is the
+    whole point: creating the four sessions this script uses measures 1.16s —
+    detect 0.57, segment 0.31, clip-text 0.20, clip-vision 0.09 — against 1.75s
+    for a complete answer. Two thirds of every grid was spent reading models off
+    disk that were read off disk for the last one.
+
+    The directory is part of the key rather than folded into the name: a request
+    that names another one wants other models, not these.
+    """
+    return loaded(directory(), name)
 
 
 def subject(prompt: str) -> tuple[str, ...]:
@@ -596,23 +625,212 @@ def occluded(panel: Image.Image, boxes: list, probability) -> set:
     return set(chosen)
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: solver-clip.py <challenge.png>", file=sys.stderr)
-        return 1
+# Where a resident copy of this script listens. Postern's own protocol is one
+# process per grid, which is the right protocol — a solver is meant to be a
+# twenty-line script — but it means these models are read off disk again for
+# every round. Set POSTERN_VISION_SOCKET and the first grid starts a copy that
+# keeps them, and every grid after it is answered by that copy.
+#
+# Nothing about postern changes: this stays a command that takes a PNG and
+# prints coordinates. The daemon is this script's business, and if it cannot be
+# had the work is simply done here instead.
+SOCKET = os.environ.get("POSTERN_VISION_SOCKET", "")
+
+# How long a resident copy waits for another grid before letting itself out.
+# Ten minutes: long enough to cover a run, short enough that a forgotten daemon
+# is not still holding 600MB of models tomorrow.
+IDLE = float(os.environ.get("POSTERN_VISION_IDLE") or 600)
+
+# How long to wait for a copy we just started. The models take about 1.2s to
+# load; the rest is slack for a cold page cache.
+STARTUP = float(os.environ.get("POSTERN_VISION_STARTUP") or 20)
+
+
+def answer(image_path: str) -> tuple[int, list, str]:
+    """Solve, as a return value rather than as a process exit.
+
+    What the solve wrote to stderr comes back with it. Answering over a socket
+    would otherwise leave every "prompt: ... -> ..." and every score in a
+    daemon's log file rather than in the run's, and those lines are how a bad
+    answer gets explained afterwards.
+    """
+    said = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(said):
+            points = solve(image_path)
+        return 0, points, said.getvalue().strip()
+    except Pass as exc:
+        return PASS, [], (said.getvalue() + f"passing: {exc}").strip()
+    except Exception as exc:
+        return 1, [], (said.getvalue() + str(exc)).strip()
+
+
+def serve(path: str) -> int:
+    """Answer grids over a socket until nobody asks any more.
+
+    One connection at a time, deliberately. A request carries the environment
+    it wants read — the prompt, the tile geometry, the thresholds — and this
+    script reads those from os.environ, which is process-wide; answering two
+    grids at once would have them reading each other's. Inference is CPU-bound
+    and already threaded inside the runtime, so the queueing costs less than it
+    looks: one grid is about half a second once the models are up.
+    """
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(path)
+    except OSError:
+        # Somebody else got there first, which is the good outcome.
+        return 0
+    os.chmod(path, 0o600)
+    listener.listen(8)
+    listener.settimeout(IDLE)
+
+    # Warm before saying a word, so the grid that started this copy waits once
+    # rather than waiting and then waiting again.
+    for name in ("detect.onnx", "clip-vision.onnx", "clip-text.onnx", SEGMENT_MODEL):
+        if os.path.exists(os.path.join(directory(), name)):
+            session(name)
 
     try:
-        points = solve(sys.argv[1])
-    except Pass as exc:
-        print(f"passing: {exc}", file=sys.stderr)
-        return PASS
-    except Exception as exc:
-        print(exc, file=sys.stderr)
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except socket.timeout:
+                return 0
+            with connection:
+                serve_one(connection)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def serve_one(connection: socket.socket) -> None:
+    chunks = []
+    while not chunks or not chunks[-1].endswith(b"\n"):
+        chunk = connection.recv(65536)
+        if not chunk:
+            return
+        chunks.append(chunk)
+
+    try:
+        request = json.loads(b"".join(chunks).decode())
+    except ValueError:
+        return
+
+    # The request's environment replaces ours for the length of it. Every
+    # POSTERN_ name is carried, so a setting added later needs nothing here.
+    for key in [k for k in os.environ if k.startswith("POSTERN_")]:
+        del os.environ[key]
+    os.environ.update(request.get("env", {}))
+
+    code, points, log = answer(request["path"])
+    connection.sendall((json.dumps({
+        "code": code,
+        "points": [[x, y] for x, y in points],
+        "log": log,
+    }) + "\n").encode())
+
+
+def ask(path: str, image_path: str) -> tuple[int, list, str]:
+    """Put one grid to a resident copy."""
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(120)
+    with client:
+        client.connect(path)
+        client.sendall((json.dumps({
+            "path": os.path.abspath(image_path),
+            "env": {k: v for k, v in os.environ.items() if k.startswith("POSTERN_")},
+        }) + "\n").encode())
+
+        chunks = []
+        while not chunks or not chunks[-1].endswith(b"\n"):
+            chunk = client.recv(65536)
+            if not chunk:
+                raise ConnectionError("the resident copy went away mid-grid")
+            chunks.append(chunk)
+
+    reply = json.loads(b"".join(chunks).decode())
+    return reply["code"], reply["points"], reply.get("log", "")
+
+
+def start(path: str) -> None:
+    """Start a resident copy and wait for it to answer.
+
+    It reports nothing. Every way this can fail — a socket somewhere
+    unwritable, a copy that will not start — ends with the caller finding
+    nobody listening, which is already a case it handles by doing the work
+    itself. Raising here would turn a missed optimisation into a failed grid.
+    """
+    # A socket file with nothing behind it is what a killed daemon leaves. Bind
+    # would refuse the address and the copy would exit reporting success.
+    try:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(1)
+        probe.connect(path)
+        probe.close()
+        return
+    except OSError:
+        pass
+
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+    try:
+        log = open(path + ".log", "ab")
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--serve", path],
+            stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+        )
+    except OSError:
+        return
+
+    deadline = time.time() + STARTUP
+    while time.time() < deadline:
+        try:
+            waiting = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            waiting.settimeout(1)
+            waiting.connect(path)
+            waiting.close()
+            return
+        except OSError:
+            time.sleep(0.05)
+
+
+def main() -> int:
+    if len(sys.argv) > 2 and sys.argv[1] == "--serve":
+        return serve(sys.argv[2])
+
+    if len(sys.argv) < 2:
+        print("usage: solver-vision.py <challenge.png>", file=sys.stderr)
         return 1
 
+    code, points, log = None, [], ""
+    if SOCKET:
+        for attempt in range(2):
+            try:
+                code, points, log = ask(SOCKET, sys.argv[1])
+                break
+            except (OSError, ValueError, KeyError) as exc:
+                # Nothing listening on the first go is the ordinary case: it is
+                # the first grid of the run. Nothing listening on the second is
+                # a copy that will not start, and the work still has to be done.
+                if attempt:
+                    print(f"answering here, no resident copy: {exc}", file=sys.stderr)
+                    break
+                start(SOCKET)
+
+    if code is None:
+        code, points, log = answer(sys.argv[1])
+
+    if log:
+        print(log, file=sys.stderr)
     for x, y in points:
         print(f"{x:.0f},{y:.0f}")
-    return 0
+    return code
 
 
 
