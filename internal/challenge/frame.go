@@ -13,6 +13,8 @@ import (
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+
+	"github.com/mikketa/postern/internal/input"
 )
 
 // frameMarker identifies the challenge document among the page's frames.
@@ -297,11 +299,41 @@ type Frame struct {
 
 	// View is the reading taken when the frame was last measured.
 	View View
+
+	// pointer is where the pointer was last left, in viewport coordinates, or
+	// nil before anything has moved it. See From.
+	pointer *input.Point
 }
 
 // Viewport is the frame's box in viewport coordinates: what to screenshot.
 func (f *Frame) Viewport() (x, y, w, h float64) {
 	return f.OriginX, f.OriginY, f.View.Width, f.View.Height
+}
+
+// From is where the next pointer movement starts: wherever the last one
+// finished, or just outside the panel if nothing has moved yet.
+//
+// Chaining rather than returning to the corner every time is both the shorter
+// path and the truer one — a person choosing four squares moves between them,
+// not back out of the panel and in again between each. It is also most of what
+// a click costs: the path is walked one event per dozen pixels with a pause
+// between each, so crossing the panel diagonally ran 40 events where a hop to
+// the next tile runs 10. Measured at 1.02-1.13s a click over three solves,
+// a third of the whole solve.
+func (f *Frame) From() input.Point {
+	if f.pointer != nil {
+		return *f.pointer
+	}
+
+	x, y := f.Point(f.View.Width+90, f.View.Height+70)
+	return input.Point{X: x, Y: y}
+}
+
+// Left records where the pointer was put down. Viewport coordinates, because
+// that is where the pointer physically is: the panel moving underneath it does
+// not move it.
+func (f *Frame) Left(x, y float64) {
+	f.pointer = &input.Point{X: x, Y: y}
 }
 
 // Point maps a position inside the challenge document onto the viewport.

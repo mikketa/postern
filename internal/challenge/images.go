@@ -990,12 +990,11 @@ func click(ctx context.Context, frame *Frame, x, y float64) error {
 	targetX, targetY := frame.Point(x, y)
 	target := input.Point{X: targetX, Y: targetY}
 
-	// Come from outside the panel, so the pointer covers real ground instead
-	// of materialising on top of what it is about to click.
-	originX, originY := frame.Point(frame.View.Width+90, frame.View.Height+70)
-	origin := input.Point{X: originX, Y: originY}
-
-	return chromedp.Run(ctx, input.Click(origin, target))
+	if err := chromedp.Run(ctx, input.Click(frame.From(), target)); err != nil {
+		return err
+	}
+	frame.Left(targetX, targetY)
+	return nil
 }
 
 // stir moves the pointer across the panel without clicking anything, to get the
@@ -1015,18 +1014,15 @@ func stir(ctx context.Context, frame *Frame, move bool, times *timings) error {
 	// not six times while nothing on screen changes. Every tile click still
 	// crosses the panel on its own curve, so the run is no stiller for it.
 	if move {
-		fromX, fromY := frame.Point(frame.View.Width+70, frame.View.Height+50)
 		toX, toY := frame.Point(frame.View.Width/2, frame.View.Height/2)
 
 		stop := times.detail("moving the pointer")
-		err := chromedp.Run(ctx, input.Move(
-			input.Point{X: fromX, Y: fromY},
-			input.Point{X: toX, Y: toY},
-		))
+		err := chromedp.Run(ctx, input.Move(frame.From(), input.Point{X: toX, Y: toY}))
 		stop()
 		if err != nil {
 			return err
 		}
+		frame.Left(toX, toY)
 	}
 
 	// Pointer events change nothing on screen — no cursor is composited under
