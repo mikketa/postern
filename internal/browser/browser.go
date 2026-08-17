@@ -45,6 +45,12 @@ const chromeUIHeight = 111
 // must not hold up the caller, since the kill that follows will end it anyway.
 const shutdownTimeout = 5 * time.Second
 
+// browserStartTimeout is how long Chrome is given to announce its debugging
+// address before the launch is called failed. It is not a budget to be spent:
+// a healthy start takes a second, and this only has to be longer than the
+// slowest cold start worth waiting for.
+const browserStartTimeout = 90 * time.Second
+
 // Options configures the Chrome instance Postern drives.
 type Options struct {
 	// UserDataDir is the Chrome profile directory. Keeping it across runs is
@@ -154,6 +160,15 @@ func Launch(ctx context.Context, opts Options) (*Browser, error) {
 		// controlled by automated test software" bit.
 		chromedp.Flag("enable-automation", false),
 		chromedp.Flag("headless", opts.Headless),
+
+		// chromedp gives Chrome 20 seconds to print its debugging address, and
+		// a cold start on a small host takes longer than that: measured, the
+		// first launch on a CI runner failed at 20.05s with "websocket url
+		// timeout reached" while every later one in the same job started fine.
+		// The wait is for a line on a pipe, so raising it costs nothing when
+		// Chrome is quick — and postern is meant to run on modest VPSs, where
+		// the first launch after a deploy is exactly the slow one.
+		chromedp.WSURLReadTimeout(browserStartTimeout),
 	)
 
 	// Nothing here tries to stop Chrome throttling the renderer, and that is a
