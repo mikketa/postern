@@ -38,10 +38,18 @@ const (
 	// inside fifteen.
 	interstitialBudget = 45 * time.Second
 
-	// verdictWait is how long a click is given to be answered. A refused
-	// challenge puts its checkbox back after about sixteen seconds, which is
-	// the slowest honest answer there is; a crossing shows in under two.
-	verdictWait = 18 * time.Second
+	// verdictWait is how long a click is given to be answered. A crossing
+	// shows in under two seconds — measured again on 2026-08-21, 1.8s from the
+	// meaningful click to the site.
+	//
+	// This was eighteen seconds, calibrated to catch a refused challenge
+	// putting its checkbox back at about sixteen. That signal is not worth its
+	// price: the answer to a refusal is to reload for another challenge, and
+	// waiting to watch the checkbox come back first buys nothing. Measured on
+	// one refused crossing, the old value spent 76 of its 89 seconds sitting in
+	// four of these waits. Six leaves a threefold margin over the slowest
+	// crossing ever observed.
+	verdictWait = 6 * time.Second
 
 	// ignoredWait is what the first click gets instead, because the first
 	// click is not answered at all — see settleBeforeClick. Waiting eighteen
@@ -72,8 +80,7 @@ const (
 	// Measured, and the measurement is the point: reading the offset off a
 	// screenshot by eye gave 41, every crossing then took two clicks and
 	// eighteen seconds of waiting out the first, and 30 crossed in 1.8s every
-	// time. The alternates stay because an inset is a layout detail, but the
-	// vendor's own number goes first.
+	// time.
 	checkboxInset = 30
 
 	// widgetWait is how long the checkbox is given to be drawn. The challenge
@@ -94,7 +101,17 @@ const (
 // which this is not — the widget was never reached.
 var errCrossing = errors.New("the challenge in front of the page")
 
-var checkboxAlternates = []float64{checkboxInset, checkboxInset, 41, 55}
+// checkboxAlternates is where to click, in order. Twice at the vendor's own
+// inset: the first click is never answered, the second is the real one.
+//
+// It used to carry 41 and 55 after those two, kept on the theory that an inset
+// is a layout detail worth hedging. It is not, and the hedge was expensive:
+// measured on a refused crossing, those two attempts clicked at 553,338 and
+// 567,338 — beside a checkbox that had already been clicked correctly at
+// 542,338 — and cost 38 seconds of verdict waiting between them. Both numbers
+// came from the eye-measurement above, which was wrong. A challenge that will
+// not take a correct click wants a different challenge, not a different pixel.
+var checkboxAlternates = []float64{checkboxInset, checkboxInset}
 
 // interstitialScript reports whether this page is a challenge rather than the
 // site, and where its checkbox is.
