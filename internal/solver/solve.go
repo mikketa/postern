@@ -200,6 +200,12 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 
 	start := time.Now()
 	if err := open(tabCtx, req.URL, bootstrap, log); err != nil {
+		// A crossing that failed says so itself, and says it about a widget
+		// that was never reached. Calling that a bootstrap failure sends the
+		// reader to the wrong half of the run.
+		if errors.Is(err, errCrossing) {
+			return nil, err
+		}
 		return nil, fmt.Errorf("solver: bootstrap widget: %w", err)
 	}
 

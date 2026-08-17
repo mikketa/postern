@@ -76,6 +76,54 @@ func TestChallengeCheckboxIsFoundThroughAClosedShadowRoot(t *testing.T) {
 	}
 }
 
+// TestCrossingCannotOutspendTheSolve locks the rule that a crossing takes its
+// budget from what the solve has left rather than from a constant. It used to
+// take the constant, so a site behind a managed challenge could spend a whole
+// default -timeout before the widget was even on the page — and then report a
+// widget that would not install.
+func TestCrossingCannotOutspendTheSolve(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		have time.Duration // what the solve has left, 0 for no deadline at all
+		want time.Duration
+	}{
+		{"no deadline leaves the crossing its own budget", 0, interstitialBudget},
+		{"a roomy deadline leaves it too", 5 * time.Minute, interstitialBudget},
+		{"a tight deadline cuts it down", 10 * time.Second, 10 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := context.Background()
+			if c.have > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, c.have)
+				defer cancel()
+			}
+
+			// Deadline arithmetic loses a moment to the clock; a second of
+			// slack keeps this about the rule and not about scheduling.
+			if got := left(ctx); got > c.want || got < c.want-time.Second {
+				t.Errorf("left() = %s, want about %s — a crossing that outspends "+
+					"the solve leaves nothing for the widget", got, c.want)
+			}
+		})
+	}
+}
+
+// TestASecondChallengeIsNotStartedWithoutTimeForIt guards the other half: with
+// less on the clock than one challenge takes, asking for another one can only
+// end in the timeout it was already heading for, having spent the budget the
+// widget still needs.
+func TestASecondChallengeIsNotStartedWithoutTimeForIt(t *testing.T) {
+	if minimumInstance < settleBeforeClick+ignoredWait+verdictWait {
+		t.Fatal("minimumInstance is under what one challenge actually costs, so a " +
+			"second one gets started with no room to be answered")
+	}
+	if minimumInstance >= interstitialBudget {
+		t.Error("minimumInstance is at or over the whole crossing budget, so a second " +
+			"challenge would never be started even when there is room for it")
+	}
+}
+
 // challengeTab serves one page and returns a tab looking at it.
 func challengeTab(t *testing.T, body string) context.Context {
 	t.Helper()
