@@ -43,9 +43,21 @@ const (
 	maxClicks = 3
 
 	// panelAfter is how long to wait before treating an open panel as a real
-	// challenge. It sits well past interactiveAfter so an ordinary
-	// verification has had its chance to complete first.
+	// challenge, for a widget with nothing to click. It sits well past
+	// interactiveAfter so an ordinary verification has had its chance to
+	// complete first.
 	panelAfter = 9 * time.Second
+
+	// panelAfterClick is the same wait for a widget that had to be ticked, and
+	// it is measured from the tick rather than from the navigation. A grid can
+	// only exist because something asked for one, so that is the moment to
+	// start counting from — and a panel with no tiles in it is not returned at
+	// all, which is what the long absolute wait was really guarding against.
+	//
+	// Measured over three solves: the checkbox was ticked at 3.9-4.1s and the
+	// grid was already up, but nothing looked at it until the ninth second.
+	// Five seconds a solve, spent watching a challenge that was on screen.
+	panelAfterClick = 1200 * time.Millisecond
 
 	// maxPanels bounds how many grids we answer in one solve. reCAPTCHA will
 	// hand out fresh ones indefinitely to a client it does not believe, and
@@ -270,7 +282,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// A panel with tiles in it is a real challenge. reCAPTCHA keeps an
 			// empty one around for every widget and flashes it open during
 			// ordinary verifications too, so its mere presence proves nothing.
-			if p.images && time.Since(start) >= panelAfter && attempts < maxPanels {
+			if p.images && panelDue(p, start, lastClick) && attempts < maxPanels {
 				panel, err := panels.Find(tabCtx)
 				if err != nil {
 					continue
@@ -399,6 +411,18 @@ func (r Request) kindOrDefault() Kind {
 		return defaultKindValue
 	}
 	return r.Kind
+}
+
+// panelDue decides whether this tick should go looking for a picture grid.
+//
+// A widget that has to be ticked cannot serve one before it is ticked, so the
+// wait runs from the tick. A widget with nothing to click asks for itself, and
+// there is no moment to hang the wait on but the navigation.
+func panelDue(p provider, start, lastClick time.Time) bool {
+	if !p.clickable {
+		return time.Since(start) >= panelAfter
+	}
+	return !lastClick.IsZero() && time.Since(lastClick) >= panelAfterClick
 }
 
 // readyToClick decides whether this tick should click: never before the widget
