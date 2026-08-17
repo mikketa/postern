@@ -37,10 +37,23 @@ const (
 	// inside fifteen.
 	interstitialBudget = 45 * time.Second
 
-	// verdictWait is how long one click is given before another aim is tried.
-	// A refused challenge puts its checkbox back after about sixteen seconds,
-	// which is the slowest honest answer there is.
+	// verdictWait is how long a click is given to be answered. A refused
+	// challenge puts its checkbox back after about sixteen seconds, which is
+	// the slowest honest answer there is; a crossing shows in under two.
 	verdictWait = 18 * time.Second
+
+	// ignoredWait is what the first click gets instead, because the first
+	// click is not answered at all — see settleBeforeClick. Waiting eighteen
+	// seconds for a verdict on a click that was never taken is fourteen
+	// seconds of every crossing spent on nothing.
+	ignoredWait = 4 * time.Second
+
+	// instances is how many challenges to answer before giving up. A challenge
+	// that has refused will go on refusing however many times its checkbox is
+	// clicked: measured, a run clicked the same accepted-elsewhere coordinate
+	// twice more and was refused both times. What gets a different answer is a
+	// different challenge, which is what reloading asks for.
+	instances = 2
 
 	// settleBeforeClick is how long the widget is given between being drawn and
 	// being clicked. It is drawn before it is listening: measured over twelve
@@ -130,12 +143,41 @@ func look(ctx context.Context) (interstitial, error) {
 // A page that is not a challenge returns immediately, which is every page on
 // every site that does not do this.
 func cross(ctx context.Context, log *slog.Logger) error {
+	for instance := range instances {
+		if instance > 0 {
+			// This challenge has refused. Clicking it again gets the same
+			// answer, so ask for another one — a reload is a fresh challenge
+			// with a fresh decision behind it.
+			log.Info("asking for another challenge", "refused", instance)
+			if err := chromedp.Run(ctx, chromedp.Reload()); err != nil {
+				return fmt.Errorf("solver: reload the challenge: %w", err)
+			}
+		}
+
+		done, err := answer(ctx, log)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("solver: the challenge in front of the page never let us through — "+
+		"it took the click and put its checkbox back, over %d challenges. That is the "+
+		"challenge refusing this browser or this address rather than missing the click. "+
+		"A residential address is the lever here; measured, the same code crossed on the "+
+		"second click from another one", instances)
+}
+
+// answer deals with one challenge. It reports whether the site is now loaded.
+func answer(ctx context.Context, log *slog.Logger) (bool, error) {
 	page, err := look(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !page.Challenge {
-		return nil
+		return true, nil
 	}
 
 	// The checkbox is not on screen the instant the challenge page is: it is
@@ -144,13 +186,13 @@ func cross(ctx context.Context, log *slog.Logger) error {
 	// whole budget in front of a widget that appeared a second later.
 	for waited := time.Duration(0); page.W == 0 && waited < widgetWait; waited += 500 * time.Millisecond {
 		if err := input.Pause(ctx, 500, 500); err != nil {
-			return err
+			return false, err
 		}
 		if page, err = look(ctx); err != nil {
-			return err
+			return false, err
 		}
 		if !page.Challenge {
-			return nil
+			return true, nil
 		}
 	}
 
@@ -158,13 +200,13 @@ func cross(ctx context.Context, log *slog.Logger) error {
 		// A challenge that solves itself without asking. It has nothing on
 		// screen to click, so the only thing to do is let it finish.
 		log.Info("a challenge stands in front of the page, with nothing to click")
-		return settle(ctx, log)
+		return true, settle(ctx, log)
 	}
 
 	// The widget is on screen; that does not mean it is listening yet.
 	if err := input.Pause(ctx, int(settleBeforeClick.Milliseconds()),
 		int(settleBeforeClick.Milliseconds())); err != nil {
-		return err
+		return false, err
 	}
 
 	// The aim is kept, only the inset varies, and the vendor's own thirty goes
@@ -173,7 +215,7 @@ func cross(ctx context.Context, log *slog.Logger) error {
 	// and a measured run spent its third attempt clicking at 55,181 — the
 	// corner of the header, nowhere near a challenge.
 	deadline := time.Now().Add(interstitialBudget)
-	for _, inset := range checkboxAlternates {
+	for attempt, inset := range checkboxAlternates {
 		if time.Now().After(deadline) {
 			break
 		}
@@ -186,24 +228,27 @@ func cross(ctx context.Context, log *slog.Logger) error {
 		log.Info("crossing the challenge in front of the page",
 			"at", fmt.Sprintf("%.0f,%.0f", target.X, target.Y))
 		if err := chromedp.Run(ctx, input.Click(from, target)); err != nil {
-			return fmt.Errorf("solver: click the challenge: %w", err)
+			return false, fmt.Errorf("solver: click the challenge: %w", err)
 		}
 
-		crossed, err := waitOut(ctx, verdictWait)
+		// The first click of a challenge is never answered, so waiting out a
+		// verdict on it is time spent on nothing.
+		wait := verdictWait
+		if attempt == 0 {
+			wait = ignoredWait
+		}
+		crossed, err := waitOut(ctx, wait)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if crossed {
 			log.Info("the challenge let us through")
-			return nil
+			return true, nil
 		}
 	}
 
-	return fmt.Errorf("solver: the challenge in front of the page never let us through — " +
-		"it took the click and put its checkbox back, which is the challenge refusing " +
-		"this browser or this address rather than missing the click. A residential " +
-		"address is the lever here; measured, the same code crossed on the first click " +
-		"from another one")
+	// Refused. The caller decides whether another challenge is worth asking for.
+	return false, nil
 }
 
 // settle waits for a challenge to finish deciding on its own.
