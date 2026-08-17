@@ -335,12 +335,39 @@ def directory() -> str:
     return os.environ.get("POSTERN_CLIP_DIR") or os.path.dirname(os.path.abspath(__file__))
 
 
+def providers() -> list[str]:
+    """Which runtimes to try, best first.
+
+    The CPU by default, because the machine that runs a solver is usually a
+    server and a server has no GPU. POSTERN_ONNX_PROVIDERS takes a
+    comma-separated list — "CUDAExecutionProvider,CPUExecutionProvider" on a
+    desktop with the CUDA build of onnxruntime installed — and the runtime
+    falls through to the next when one cannot be had, so naming a provider
+    that is not there costs a warning rather than a failure.
+    """
+    named = os.environ.get("POSTERN_ONNX_PROVIDERS", "").strip()
+    if not named:
+        return ["CPUExecutionProvider"]
+
+    wanted = [p.strip() for p in named.split(",") if p.strip()]
+    have = set(ort.get_available_providers())
+    usable = [p for p in wanted if p in have]
+    for missing in (p for p in wanted if p not in have):
+        print(f"no {missing} in this onnxruntime, skipping it", file=sys.stderr)
+
+    # Always somewhere to land. A list the runtime cannot satisfy at all is a
+    # session that never opens, which is a grid lost to a configuration typo.
+    if "CPUExecutionProvider" not in usable:
+        usable.append("CPUExecutionProvider")
+    return usable
+
+
 @functools.lru_cache(maxsize=None)
-def loaded(folder: str, name: str) -> ort.InferenceSession:
+def loaded(folder: str, name: str, providers: tuple[str, ...]) -> ort.InferenceSession:
     options = ort.SessionOptions()
     options.log_severity_level = 3
     return ort.InferenceSession(
-        os.path.join(folder, name), options, providers=["CPUExecutionProvider"]
+        os.path.join(folder, name), options, providers=list(providers)
     )
 
 
@@ -354,9 +381,10 @@ def session(name: str) -> ort.InferenceSession:
     disk that were read off disk for the last one.
 
     The directory is part of the key rather than folded into the name: a request
-    that names another one wants other models, not these.
+    that names another one wants other models, not these. So is the runtime, for
+    the same reason.
     """
-    return loaded(directory(), name)
+    return loaded(directory(), name, tuple(providers()))
 
 
 def subject(prompt: str) -> tuple[str, ...]:
