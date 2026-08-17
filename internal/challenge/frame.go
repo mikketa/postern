@@ -318,7 +318,7 @@ func (f *Frame) Point(x, y float64) (float64, float64) {
 func (f *Frame) UnderPoint(ctx context.Context, x, y float64) string {
 	script := fmt.Sprintf(`(() => {
   const el = document.elementFromPoint(%f, %f);
-  if (!el) return 'rien';
+  if (!el) return 'nothing';
   const src = (el.getAttribute && el.getAttribute('src')) || '';
   const kind = src.includes('/bframe') ? 'bframe' :
                src.includes('/anchor') ? 'anchor' : el.tagName.toLowerCase();
