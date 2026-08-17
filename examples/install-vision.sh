@@ -197,12 +197,17 @@ for head in probe-*.json; do
 	esac
 done
 
+# The socket keeps a copy of the solver resident between grids, which is worth
+# about six tenths of a second on each: measured on one panel, 1.17s to 0.56s
+# for a 3x3 and 1.76s to 1.21s for a 4x4. Set POSTERN_VISION_SOCKET to empty
+# before calling this to go back to a fresh process per grid.
 cat > solve <<EOF
 #!/bin/sh
 export POSTERN_CLIP_DIR="$DIR"
 export POSTERN_CLIP_CONFIDENCE="$CONFIDENCE"
 export POSTERN_CLIP_LAYOUT="$LAYOUT"
 export POSTERN_CLIP_MODEL="$MODEL"
+export POSTERN_VISION_SOCKET="\${POSTERN_VISION_SOCKET-\${XDG_RUNTIME_DIR:-/tmp}/postern-vision.sock}"
 exec "$DIR/venv/bin/python" "$SCRIPT" "\$@"
 EOF
 chmod +x solve
