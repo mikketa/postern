@@ -44,6 +44,9 @@ type Server struct {
 	// Empty leaves the server open, which CheckReachable only tolerates on
 	// loopback.
 	token string
+
+	// metrics is what /metrics reports.
+	metrics *Metrics
 }
 
 // New builds a Server over one shared browser. maxConcurrent below 1 is
@@ -74,6 +77,7 @@ func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSol
 		log:         log,
 		slots:       make(chan struct{}, maxConcurrent),
 		token:       Token(),
+		metrics:     NewMetrics(),
 	}
 }
 
@@ -83,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /solve", s.handleSolve)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /fleet", s.handleFleet)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	guarded := authenticated(s.token, mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +177,14 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	solved := false
-	defer func() { give(solved) }()
+	started := time.Now()
+	defer func() {
+		give(solved)
+		// Recorded on every path out, including the ones that returned an
+		// error: a solver measured only on its successes reports a latency
+		// that no user experiences.
+		s.metrics.Observe(req.Kind, time.Since(started), solved)
+	}()
 
 	result, err := solver.Solve(r.Context(), chrome, solver.Request{
 		Kind:        solver.Kind(req.Kind),
@@ -266,4 +278,17 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// handleMetrics renders the counters in Prometheus text format. It sits behind
+// the same token as everything else: how many solves an operation runs, and
+// how well, is not public information.
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	s.metrics.Write(w, map[string]int{
+		"postern_fleet_identities_ready": s.fleet.Ready(),
+		"postern_fleet_identities_total": s.fleet.Size(),
+		"postern_solve_slots_in_use":     len(s.slots),
+		"postern_solve_slots_total":      cap(s.slots),
+	})
 }
