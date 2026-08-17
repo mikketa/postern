@@ -42,7 +42,7 @@ Every row was run against the live service. Nothing here is an estimate.
 | **reCAPTCHA v2 checkbox**, no challenge served | token, ~5s |
 | **reCAPTCHA v2 invisible** | token, ~4s |
 | **reCAPTCHA v3** | token, ~4s |
-| **Cloudflare managed challenge** in front of a site | **5/6 crossed**, then the page's own widget solved |
+| **Cloudflare managed challenge** in front of a site | **6/8 crossed**, 13.3s, then the page's own widget solved |
 
 The image-challenge row needs a vision model, which postern does not ship. That number is
 with `examples/solver-vision.py`.
