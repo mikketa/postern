@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96"
+     role="img" aria-label="A postern: a small arched door set in a fortress wall, standing ajar">
+  <!-- The wall. -->
+  <rect x="6" y="13" width="84" height="76" rx="2" fill="#a9b2bf"/>
+
+  <!-- Masonry joints. Staggered, and stopping short of the doorway so the arch
+       is the only thing the eye lands on. -->
+  <g stroke="#8d97a6" stroke-width="1.6" stroke-linecap="square">
+    <path d="M6 32h84M6 51h27M69 51h21M6 70h27M69 70h21"/>
+    <path d="M31 13v19M63 13v19M19 32v19M77 32v19M22 51v19M74 51v19M17 70v19M79 70v19"/>
+  </g>
+
+  <!-- Dressed stone around the opening: a wall gets an arch built into it, it
+       does not get a hole punched in it. -->
+  <path d="M32 89V57a16 16 0 0 1 32 0v32Z" fill="#c6ceda"/>
+
+  <!-- The passage. -->
+  <path d="M35 89V57a13 13 0 0 1 26 0v32Z" fill="#0f131a"/>
+
+  <!-- The door, standing open a crack. A postern is the door you walk through
+       instead of attacking the wall, so it is drawn ajar rather than shut. -->
+  <path d="M35 89V57a13 13 0 0 1 19 -12.1V89Z" fill="#6c7787"/>
+  <g stroke="#5b6675" stroke-width="1.3" stroke-linecap="round">
+    <path d="M41.5 52.5V85M47.5 48.5V85"/>
+  </g>
+
+  <!-- The gap, and the only warm thing in the mark. -->
+  <path d="M54 44.9a13 13 0 0 1 4 3V89h-4Z" fill="#f0b45f"/>
+
+  <!-- Joints in the arch ring, so it reads as cut stones and not as a border. -->
+  <g stroke="#a9b2bf" stroke-width="1.3" stroke-linecap="round">
+    <path d="M33.3 66.5h3M36.2 51.4l2.6 1.6M48 41h0M46.6 41.2v3M59.8 53l2.6-1.6M61.7 66.5h3"/>
+  </g>
+
+  <!-- Threshold. -->
+  <rect x="2" y="89" width="92" height="5" rx="1.5" fill="#8d97a6"/>
+</svg>
