@@ -131,6 +131,11 @@ screenshot. A solver may ignore all three.
 Three examples ship with it: `solver-template.py` to build on, `solver-yolos.py` (a plain
 detector), and `solver-vision.py`, which scores **48 of 48** grids on the bench.
 
+One process per grid is the right protocol for a twenty-line script and the wrong one for
+600MB of models, so `solver-vision.py` keeps a copy of itself resident and answers over a
+socket. **2.49s a grid becomes 1.30s.** Postern is not involved: it still runs a command
+that takes a PNG and prints coordinates.
+
 > [!TIP]
 > `examples/install-vision.sh -export` sets up `solver-vision.py` and its models in one
 > command. Without `-export` you get a working install that scores 38 of 48 — the two
