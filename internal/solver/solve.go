@@ -28,10 +28,18 @@ const (
 	// pollInterval is how often we read the token slot back out of the page.
 	pollInterval = 200 * time.Millisecond
 
-	// interactiveAfter is how long we let the widget settle before assuming it
-	// wants a click. Non-interactive challenges resolve well inside this, so
-	// waiting costs nothing and avoids clicking at a widget still laying out.
+	// interactiveAfter is how long we let a widget that might solve itself get
+	// on with it before assuming it wants a click. Turnstile usually does,
+	// well inside this, and clicking at one mid-verification is how a free
+	// token becomes a challenge.
 	interactiveAfter = 3 * time.Second
+
+	// layoutAfter is the same wait for a widget that will never solve itself.
+	// A reCAPTCHA checkbox has to be ticked by somebody whatever happens, so
+	// the only thing worth waiting for is the widget being laid out — and a
+	// click at one that is not is refused before it is sent, then tried again
+	// on the next tick a fifth of a second later.
+	layoutAfter = 1200 * time.Millisecond
 
 	// checkboxOffsetX is the distance from the widget's left edge to the middle
 	// of its checkbox, in CSS pixels. Both vendors put it in the same place,
@@ -336,7 +344,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// An interactive challenge sits there until someone ticks the box.
 			// A failed attempt usually means the widget has not been laid out
 			// yet, so leave the counter alone and try again on the next tick.
-			if p.clickable && readyToClick(start, lastClick, clicks) {
+			if p.clickable && readyToClick(p, start, lastClick, clicks) {
 				if err := clickCheckbox(tabCtx, p.frameHost); err != nil {
 					log.Debug("cannot click the checkbox yet", "why", err)
 				} else {
@@ -428,8 +436,12 @@ func panelDue(p provider, start, lastClick time.Time) bool {
 // readyToClick decides whether this tick should click: never before the widget
 // has had its chance to solve itself, never more than maxClicks times, and
 // never twice in quick succession.
-func readyToClick(start, lastClick time.Time, clicks int) bool {
-	if clicks >= maxClicks || time.Since(start) < interactiveAfter {
+func readyToClick(p provider, start, lastClick time.Time, clicks int) bool {
+	settle := layoutAfter
+	if p.selfSolves {
+		settle = interactiveAfter
+	}
+	if clicks >= maxClicks || time.Since(start) < settle {
 		return false
 	}
 	return clicks == 0 || time.Since(lastClick) >= clickRetryAfter

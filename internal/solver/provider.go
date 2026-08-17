@@ -39,6 +39,13 @@ type provider struct {
 	// reporting that immediately beats sitting out the full timeout.
 	images bool
 
+	// selfSolves marks a widget that can hand over a token with nothing
+	// clicked. Those are given interactiveAfter to do it in, because clicking
+	// at one that was about to solve itself turns a free token into a
+	// challenge. A checkbox that never solves itself has nothing to wait for
+	// but its own layout.
+	selfSolves bool
+
 	// bootstrap builds the in-page script that renders the widget and parks
 	// the result on window.__postern.
 	bootstrap func(Request) (string, error)
@@ -51,6 +58,7 @@ var providers = map[Kind]provider{
 		tokenField: "cf-turnstile-response",
 		frameHost:  "challenges.cloudflare.com",
 		clickable:  true,
+		selfSolves: true,
 		bootstrap:  turnstileBootstrap,
 	},
 	RecaptchaV2: {
