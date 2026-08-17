@@ -32,6 +32,14 @@ import (
 // each acknowledgement is the difference between three seconds and three
 // minutes. Nothing is gained by it: what postern needs to know about the click
 // is whether the page changed, which it reads from the page afterwards.
+//
+// Twenty-five, and lowering it is not worth trying again. Dispatched against a
+// local page an acknowledgement measures 16.7ms median over sixty events —
+// suspiciously exactly a frame at 60Hz — which suggested a dozen events to a
+// click were each being paid for at one frame. They are not: dropped to 8ms and
+// measured over eight solves, a click cost 901-1055ms against 906-949ms before,
+// which is no difference at all. Whatever that 16.7ms is, the solve does not
+// pay it, and the bound here is only ever reached by a renderer in trouble.
 const dispatchTimeout = 25 * time.Millisecond
 
 // send dispatches one input event without waiting indefinitely for the reply.
