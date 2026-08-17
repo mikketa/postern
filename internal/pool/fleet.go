@@ -27,9 +27,6 @@ type Fleet struct {
 	opts  browser.Options
 	pages []string
 	log   *slog.Logger
-
-	// mu guards nothing but the log line below; the pool has its own lock.
-	mu sync.Mutex
 }
 
 // NewFleet pairs a pool with the browser options every identity starts from.
