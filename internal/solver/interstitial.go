@@ -188,7 +188,12 @@ func cross(ctx context.Context, log *slog.Logger) error {
 
 		done, err := answer(ctx, log)
 		if err != nil {
-			return err
+			// Including the deadline running out mid-crossing, which is the
+			// common way this fails and which arrives here as a bare context
+			// error. Left unmarked it was reported as a widget that would not
+			// install — measured on a live run, and the whole reason the
+			// caller cannot simply trust the wrapping it does itself.
+			return fmt.Errorf("solver: %w: %w", errCrossing, err)
 		}
 		if done {
 			return nil
