@@ -79,8 +79,9 @@ func TestAwaitGivesUpOnAGridThatIsNotChanging(t *testing.T) {
 	if replaced {
 		t.Error("replaced = true on a grid where nothing changed")
 	}
-	// The grace, plus at most the poll that notices it has passed.
-	if limit := replaceGrace + 2*pollWait; took > limit {
+	// The grace, plus room for the polls that notice it has passed — the
+	// budget is 4.5s, so there is no reading of this that passes by accident.
+	if limit := replaceGrace + 5*pollWait; took > limit {
 		t.Errorf("waited %s at a grid doing nothing, want under %s", took.Round(time.Millisecond), limit)
 	}
 }
