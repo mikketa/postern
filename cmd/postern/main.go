@@ -325,6 +325,13 @@ func runServe(args []string) error {
 		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log)
 	}
 
+	// Refuse to hand a browser fleet to the network with nothing in front of
+	// it. This is an error and not a warning on purpose: a warning printed at
+	// startup is read once, on the day it is set up, and never again.
+	if err := api.CheckReachable(*addr, api.Token()); err != nil {
+		return err
+	}
+
 	srv := newHTTPServer(*addr, handler.Handler(), *timeout)
 
 	errc := make(chan error, 1)

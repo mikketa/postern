@@ -39,6 +39,11 @@ type Server struct {
 	// slots caps how many tabs solve at once. One Chrome with a dozen tabs
 	// grinding challenges is both slow and conspicuous.
 	slots chan struct{}
+
+	// token is the shared secret every route but the health check requires.
+	// Empty leaves the server open, which CheckReachable only tolerates on
+	// loopback.
+	token string
 }
 
 // New builds a Server over one shared browser. maxConcurrent below 1 is
@@ -68,16 +73,25 @@ func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSol
 		imageSolver: imageSolver,
 		log:         log,
 		slots:       make(chan struct{}, maxConcurrent),
+		token:       Token(),
 	}
 }
 
-// Handler returns the routes.
+// Handler returns the routes, behind the bearer check when one is configured.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /solve", s.handleSolve)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /fleet", s.handleFleet)
-	return mux
+
+	guarded := authenticated(s.token, mux)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if openPath(r.URL.Path) {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		guarded.ServeHTTP(w, r)
+	})
 }
 
 // maxBodyBytes bounds a solve request. The body is a handful of short fields;
