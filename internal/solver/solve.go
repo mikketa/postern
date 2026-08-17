@@ -199,7 +199,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	defer cancel()
 
 	start := time.Now()
-	if err := open(tabCtx, req.URL, bootstrap); err != nil {
+	if err := open(tabCtx, req.URL, bootstrap, log); err != nil {
 		return nil, fmt.Errorf("solver: bootstrap widget: %w", err)
 	}
 
@@ -372,7 +372,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 // underneath a request — it happens on a cold profile, it has nothing to do
 // with the page, and the documented remedy is to ask again. It cost a measured
 // run for no reason at all.
-func open(ctx context.Context, url, bootstrap string) error {
+func open(ctx context.Context, url, bootstrap string, log *slog.Logger) error {
 	var err error
 	for attempt := range navigateAttempts {
 		if attempt > 0 {
@@ -380,13 +380,22 @@ func open(ctx context.Context, url, bootstrap string) error {
 				return err
 			}
 		}
-		err = chromedp.Run(ctx,
-			chromedp.Navigate(url),
-			chromedp.Evaluate(bootstrap, nil),
-		)
-		if err == nil || !strings.Contains(err.Error(), transientNavigation) {
+		err = chromedp.Run(ctx, chromedp.Navigate(url))
+		if err != nil {
+			if strings.Contains(err.Error(), transientNavigation) {
+				continue
+			}
 			return err
 		}
+
+		// The site may not be what answered. A challenge standing in front of
+		// it has to be crossed before there is a page to put a widget on —
+		// installing the bootstrap on the interstitial would render our widget
+		// on Cloudflare's holding page and wait for a token from it.
+		if err := cross(ctx, log); err != nil {
+			return err
+		}
+		return chromedp.Run(ctx, chromedp.Evaluate(bootstrap, nil))
 	}
 	return err
 }
