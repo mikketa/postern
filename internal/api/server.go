@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -79,6 +80,12 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
+// maxBodyBytes bounds a solve request. The body is a handful of short fields;
+// anything beyond this is a mistake or an attack, and it matters because
+// json.Decoder reads the whole thing into memory before it decides it did not
+// like it.
+const maxBodyBytes = 64 << 10
+
 type solveRequest struct {
 	URL       string `json:"url"`
 	SiteKey   string `json:"sitekey"`
@@ -88,15 +95,41 @@ type solveRequest struct {
 	TimeoutMS int    `json:"timeout_ms,omitempty"`
 }
 
+// effectiveTimeout is how long a request actually gets: what it asked for, or
+// the operator's ceiling, whichever is shorter.
+//
+// A caller may ask for less than the operator allows, never more. The slot a
+// request holds is a whole browser and there are only -concurrency of them, so
+// an unbounded timeout_ms lets one client pin an identity for as long as it
+// cares to name — and the fleet answers everyone else with 503 meanwhile.
+func effectiveTimeout(askedMS int, ceiling time.Duration) time.Duration {
+	if askedMS <= 0 {
+		return ceiling
+	}
+	return min(time.Duration(askedMS)*time.Millisecond, ceiling)
+}
+
 type solveResponse struct {
 	Token     string `json:"token"`
 	ElapsedMS int64  `json:"elapsed_ms"`
 }
 
 func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
 	var req solveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+	dec := json.NewDecoder(r.Body)
+	// A misspelt field is otherwise silent: "timeoutMs" instead of
+	// "timeout_ms" leaves the caller believing it set a timeout it did not,
+	// and nothing in the response says so.
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
 		return
 	}
 	if req.URL == "" || req.SiteKey == "" {
@@ -104,10 +137,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeout := s.timeout
-	if req.TimeoutMS > 0 {
-		timeout = time.Duration(req.TimeoutMS) * time.Millisecond
-	}
+	timeout := effectiveTimeout(req.TimeoutMS, s.timeout)
 
 	// Wait for a free slot, but give up if the client hangs up first.
 	select {
