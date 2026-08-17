@@ -97,6 +97,19 @@ const (
 	// finished asking for.
 	replaceBudget = 5 * replaceWait
 
+	// replaceGrace is how long a replacement is given to *begin*, which is a
+	// much shorter thing than how long it takes to finish. reCAPTCHA marks the
+	// tile it is about to swap the moment the click lands — that mark is what
+	// View.Settling reads — so a grid showing neither a marked tile nor a new
+	// picture by the end of this is a grid where nothing was ever going to
+	// happen.
+	//
+	// It is what the static case costs now. Measured over three solves before
+	// it existed, every wait for a replacement ran the whole budget out and
+	// none of them was ever going to produce one: 4.5s a round, 21-35% of the
+	// solve, spent looking at a grid that had already finished changing.
+	replaceGrace = 1200 * time.Millisecond
+
 	// pollWait is how often to look while waiting any of those out.
 	//
 	// It used to be replaceWait itself, which made the same number both the
@@ -263,6 +276,11 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 	// rounds is how many grids this challenge took, which is the caller's
 	// only measure of how much reCAPTCHA is asking for.
 	rounds := 0
+	// grace is how long a replacement is given to start before the wait is
+	// called off. It widens to the whole budget the first time the panel
+	// refuses an answer, on the chance that the answer was submitted before
+	// the grid had finished changing. One round is what being wrong costs.
+	grace := replaceGrace
 	// Reported however the challenge ends, including the error paths: a solve
 	// that ran out of time is exactly the one worth knowing the shape of.
 	defer func() { times.report(log, rounds) }()
@@ -438,7 +456,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		// wrong one — so go round again and look at what replaced them.
 		if clicked > 0 {
 			stop := times.track("waiting for replacements")
-			replaced, err := await(ctx, frame, before, replaceBudget, times)
+			replaced, err := await(ctx, frame, before, replaceBudget, grace, times)
 			stop()
 			if err != nil {
 				return rounds, err
@@ -457,7 +475,7 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 		}
 
 		stop = times.track("waiting for the verdict")
-		_, err = await(ctx, frame, before, verdictBudget, times)
+		_, err = await(ctx, frame, before, verdictBudget, verdictBudget, times)
 		stop()
 		if err != nil {
 			return rounds, err
@@ -467,6 +485,16 @@ func Solve(ctx context.Context, frame *Frame, opts Options, log *slog.Logger) (i
 			return rounds, nil
 		}
 		log.Info("another challenge", "notice", frame.View.Notice)
+
+		// The panel objected. It may have been a wrong answer, or it may have
+		// been a right one submitted while the grid was still swapping tiles
+		// underneath it — and nothing in the notice separates the two. Stop
+		// calling the wait off early for the rest of this challenge: a dynamic
+		// grid stays dynamic, so at most one round is spent finding out.
+		if frame.View.Notice != "" && grace < replaceBudget {
+			grace = replaceBudget
+			log.Info("waiting the grid out in full from here", "notice", frame.View.Notice)
+		}
 	}
 
 	return rounds, nil
@@ -757,16 +785,25 @@ func reload(ctx context.Context, frame *Frame, before []string, times *timings) 
 
 	// Wait for a genuinely different grid rather than photographing the old one
 	// again, which would pass right back to the solver and stall the round.
-	return await(ctx, frame, before, replaceBudget, times)
+	// The whole budget, no grace: a fresh grid is fetched rather than faded in,
+	// so there is nothing on screen to say one is on its way.
+	return await(ctx, frame, before, replaceBudget, replaceBudget, times)
 }
 
 // await waits for the panel to become something other than what it was: a
-// different grid, replaced tiles, or no panel at all. It waits out the whole
-// budget rather than stopping at the first quiet moment: reCAPTCHA takes a
-// beat to decide, and a grid read too early looks exactly like a grid that is
-// never going to change.
-func await(ctx context.Context, frame *Frame, before []string, budget time.Duration, times *timings) (bool, error) {
-	deadline := time.Now().Add(budget)
+// different grid, replaced tiles, or no panel at all.
+//
+// It waits out the whole budget rather than stopping at the first quiet
+// moment: reCAPTCHA takes a beat to decide, and a grid read too early looks
+// exactly like a grid that is never going to change. What it does not do is
+// wait out the budget for a change that has not even started — grace is how
+// long it gives one to start, after which a panel doing nothing is a panel
+// that is finished. Pass the budget as the grace to wait the old way.
+func await(ctx context.Context, frame *Frame, before []string, budget, grace time.Duration, times *timings) (bool, error) {
+	start := time.Now()
+	deadline := start.Add(budget)
+	begun := false
+
 	for time.Now().Before(deadline) {
 		stop := times.detail("one look at the panel")
 		err := input.Pause(ctx, int(pollWait.Milliseconds()), int(pollWait.Milliseconds()))
@@ -781,11 +818,18 @@ func await(ctx context.Context, frame *Frame, before []string, budget time.Durat
 			return true, nil
 		}
 		if frame.View.Settling {
+			// A tile mid-fade is the change under way. Give it the whole
+			// budget to finish, however long the grace was.
+			begun = true
 			times.mark("a look spent on a tile mid-fade")
 			continue
 		}
 		if changed(before, frame.View.Pictures()) {
 			return true, nil
+		}
+		if !begun && time.Since(start) >= grace {
+			times.mark("waits ended early, nothing had started")
+			return false, nil
 		}
 	}
 	times.mark("waits given up on")
@@ -885,7 +929,7 @@ func verify(ctx context.Context, frame *Frame, times *timings, log *slog.Logger)
 		// pointer arrives — the panel relabels and relays itself mid-round, and
 		// a click into that gap is swallowed silently. If nothing moved, fall
 		// through to the keyboard rather than leaving the answer unsubmitted.
-		taken, err := await(ctx, frame, before, pointerBudget, times)
+		taken, err := await(ctx, frame, before, pointerBudget, pointerBudget, times)
 		if err != nil || taken || !frame.Open() {
 			return err
 		}
