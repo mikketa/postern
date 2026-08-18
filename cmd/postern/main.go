@@ -289,6 +289,18 @@ func runServe(args []string) error {
 		return err
 	}
 
+	// Refuse to hand a browser fleet to the network with nothing in front of
+	// it. An error and not a warning on purpose: a warning printed at startup
+	// is read once, on the day it is set up, and never again.
+	//
+	// Checked here rather than next to ListenAndServe so a misconfiguration
+	// costs nothing — below this line the next thing that happens is Chrome
+	// and an Xvfb starting, and it is galling to wait for them to come up only
+	// to be told the address was wrong.
+	if err := api.CheckReachable(*addr, api.Token()); err != nil {
+		return err
+	}
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -323,13 +335,6 @@ func runServe(args []string) error {
 		}
 		log.Info("serving from a fleet", "identities", fleet.Size(), "ready", fleet.Ready())
 		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log)
-	}
-
-	// Refuse to hand a browser fleet to the network with nothing in front of
-	// it. This is an error and not a warning on purpose: a warning printed at
-	// startup is read once, on the day it is set up, and never again.
-	if err := api.CheckReachable(*addr, api.Token()); err != nil {
-		return err
 	}
 
 	srv := newHTTPServer(*addr, handler.Handler(), *timeout)
