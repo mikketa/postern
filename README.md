@@ -144,7 +144,7 @@ field is `400` rather than a silent default. `GET /health` returns `{"status": "
 Set `POSTERN_TOKEN` and every route but the health check requires it:
 
 ```sh
-POSTERN_TOKEN=$(openssl rand -hex 32) postern serve -addr 0.0.0.0:8099
+POSTERN_TOKEN=$(openssl rand -hex 32) postern serve -addr 127.0.0.1:8099
 ```
 
 ```sh
@@ -154,6 +154,21 @@ curl -s localhost:8099/solve -H "Authorization: Bearer $POSTERN_TOKEN" -d '{...}
 An environment variable rather than a flag, for the same reason proxy credentials are
 stripped off `-proxy`: a command line is readable by every user on the machine through
 `/proc`.
+
+A bearer token is a password, and it is sent on every request. So off loopback postern
+**will not carry it over cleartext**:
+
+```sh
+# Terminate TLS itself
+postern serve -addr 0.0.0.0:8099 -tls-cert cert.pem -tls-key key.pem
+
+# Or say that something in front already does
+postern serve -addr 0.0.0.0:8099 -behind-tls-proxy
+```
+
+The second flag is named for what it claims rather than for what it turns off. An operator
+who has a terminator should recognise their own deployment in it; one who does not should
+not be tempted by it.
 
 ### Operating it
 
@@ -381,6 +396,9 @@ the target.
 | `-warm-pages` | none | Pages a new identity browses before its first solve |
 | `-image-solver` | none | As above |
 | `-timeout` | `60s` | Per-solve ceiling. `timeout_ms` may ask for less, never more |
+| `-tls-cert` | none | Certificate file: serve HTTPS rather than HTTP |
+| `-tls-key` | none | Private key file, with `-tls-cert` |
+| `-behind-tls-proxy` | `false` | Something in front already terminates TLS, so cleartext off this machine is intended |
 
 `serve` also reads **`POSTERN_TOKEN`** from the environment — see
 [Authentication](#authentication). Without it the server will only bind to loopback.
@@ -437,15 +455,21 @@ docker run -d -p 8099:8099 \
   -e POSTERN_TOKEN="$(openssl rand -hex 32)" \
   -v postern-profile:/home/postern/.config/postern \
   --security-opt seccomp=unconfined \
-  postern
+  postern -behind-tls-proxy
 ```
 
 Chromium, Xvfb and real fonts, running as a non-root user. The volume is the point of
 mounting anything: the profile is what ages, and an identity that starts clean on every
 restart never matures.
 
-The image binds `0.0.0.0`, so **it will not start without `POSTERN_TOKEN`** — see
-[Authentication](#authentication). That is the guard working, not a bug.
+The image binds `0.0.0.0`, so it will not start without `POSTERN_TOKEN`, and not without
+being told how the token is protected — `-behind-tls-proxy` above, or `-tls-cert` and
+`-tls-key` with the certificates mounted in. See [Authentication](#authentication). Failing
+at startup with the reason is the guard working, not a bug.
+
+> [!CAUTION]
+> `-behind-tls-proxy` in the example assumes you actually have one. Publishing that port
+> straight to a network without a terminator hands out the token on every request.
 
 > [!WARNING]
 > `seccomp=unconfined` turns off syscall filtering for that container, which is more than
