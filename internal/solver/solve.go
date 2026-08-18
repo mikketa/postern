@@ -175,7 +175,7 @@ type state struct {
 // independent of how the target site lays out its form.
 func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Duration) (*Result, error) {
 	if req.URL == "" || req.SiteKey == "" {
-		return nil, errors.New("solver: url and sitekey are required")
+		return nil, fmt.Errorf("solver: %w: url and sitekey are required", ErrInvalidRequest)
 	}
 
 	p, err := lookup(req.Kind)
@@ -203,7 +203,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 		// A crossing that failed says so itself, and says it about a widget
 		// that was never reached. Calling that a bootstrap failure sends the
 		// reader to the wrong half of the run.
-		if errors.Is(err, errCrossing) {
+		if errors.Is(err, ErrCrossing) {
 			return nil, err
 		}
 		return nil, fmt.Errorf("solver: bootstrap widget: %w", err)
@@ -238,13 +238,13 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 			// time on the challenge; only the latter is worth reporting as one.
 			if errors.Is(context.Cause(tabCtx), context.DeadlineExceeded) {
 				if clicks > 0 && !sawVendorFrame {
-					return nil, fmt.Errorf("solver: no token after %s — the widget was clicked "+
+					return nil, fmt.Errorf("solver: %w after %s — the widget was clicked "+
 						"%d times but %s never rendered its own frame, so there was nothing on "+
 						"screen to answer. A sitekey that forces an interactive challenge does "+
 						"this, and so does a vendor script the page would not load",
-						timeout, clicks, req.kindOrDefault())
+						ErrNoToken, timeout, clicks, req.kindOrDefault())
 				}
-				return nil, fmt.Errorf("solver: no token after %s", timeout)
+				return nil, fmt.Errorf("solver: %w after %s", ErrNoToken, timeout)
 			}
 			return nil, tabCtx.Err()
 
@@ -265,7 +265,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				if s.Error == errExpired && resets < maxResets {
 					var ok bool
 					if err := chromedp.Run(tabCtx, chromedp.Evaluate(resetScript, &ok)); err != nil || !ok {
-						return nil, fmt.Errorf("solver: %s error %s%s",
+						return nil, fmt.Errorf("solver: %w: %s error %s%s", ErrVendor,
 							req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
 					}
 					resets++
@@ -274,7 +274,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					log.Info("the challenge expired, starting it over", "resets", resets)
 					continue
 				}
-				return nil, fmt.Errorf("solver: %s error %s%s",
+				return nil, fmt.Errorf("solver: %w: %s error %s%s", ErrVendor,
 					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
 			}
 			if s.Token != "" {
@@ -303,8 +303,8 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				}
 				if panel != nil {
 					if req.ImageSolver == "" {
-						return nil, errors.New("solver: an image challenge was served and no " +
-							"image solver is configured — see -image-solver in the README")
+						return nil, fmt.Errorf("solver: %w — see -image-solver in the README",
+							ErrNoImageSolver)
 					}
 
 					attempts++
@@ -320,7 +320,7 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 						// Running out of time mid-challenge is the same failure
 						// as running out of time waiting, and reads better said
 						// the same way.
-						return nil, fmt.Errorf("solver: no token after %s", timeout)
+						return nil, fmt.Errorf("solver: %w after %s", ErrNoToken, timeout)
 					}
 					if err != nil {
 						return nil, fmt.Errorf("solver: %w", err)
@@ -334,10 +334,10 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					// to arrive at the same place, and reports "no token" for
 					// something that was never about the answers.
 					if rounds > gradedRounds {
-						return nil, fmt.Errorf("solver: %d picture grids and still asking — "+
+						return nil, fmt.Errorf("solver: %w: %d picture grids and still asking — "+
 							"this address or profile is what is being refused, not the answers. "+
 							"A profile with history, or an IP that is not a datacenter, is the "+
-							"lever here; see the README on reputation", rounds)
+							"lever here; see the README on reputation", ErrRefused, rounds)
 					}
 
 					// The verdict is not ours to read: a right answer produces

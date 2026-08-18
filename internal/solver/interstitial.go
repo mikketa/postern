@@ -3,7 +3,6 @@ package solver
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -95,11 +94,6 @@ const (
 	// having spent what the widget still needs.
 	minimumInstance = settleBeforeClick + ignoredWait + verdictWait
 )
-
-// errCrossing marks a failure to get past a challenge standing in front of the
-// site. A solve reports its own failures as a widget that would not install,
-// which this is not — the widget was never reached.
-var errCrossing = errors.New("the challenge in front of the page")
 
 // checkboxAlternates is where to click, in order. Twice at the vendor's own
 // inset: the first click is never answered, the second is the real one.
@@ -210,7 +204,7 @@ func cross(ctx context.Context, log *slog.Logger) error {
 			// error. Left unmarked it was reported as a widget that would not
 			// install — measured on a live run, and the whole reason the
 			// caller cannot simply trust the wrapping it does itself.
-			return fmt.Errorf("solver: %w: %w", errCrossing, err)
+			return fmt.Errorf("solver: %w: %w", ErrCrossing, err)
 		}
 		if done {
 			return nil
@@ -223,14 +217,14 @@ func cross(ctx context.Context, log *slog.Logger) error {
 			"attempt(s). Crossing costs about 13s when it goes well and the whole "+
 			"budget when it does not, and the widget still has to be solved "+
 			"afterwards — raise -timeout for a site behind a managed challenge",
-			errCrossing, crossed)
+			ErrCrossing, crossed)
 	}
 
 	return fmt.Errorf("solver: %w never let us through — it took the click and put its "+
 		"checkbox back, over %d challenges. That is the challenge refusing this browser "+
 		"or this address rather than missing the click. A residential address is the "+
 		"lever here; measured, the same code crossed on the second click from another one",
-		errCrossing, crossed)
+		ErrCrossing, crossed)
 }
 
 // answer deals with one challenge. It reports whether the site is now loaded.
@@ -322,7 +316,7 @@ func settle(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 	if !crossed {
-		return fmt.Errorf("solver: %w had nothing to click and never resolved", errCrossing)
+		return fmt.Errorf("solver: %w had nothing to click and never resolved", ErrCrossing)
 	}
 	log.Info("the challenge let us through")
 	return nil
