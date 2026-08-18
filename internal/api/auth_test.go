@@ -70,24 +70,40 @@ func TestTheHealthCheckStaysOpen(t *testing.T) {
 	}
 }
 
-func TestNoTokenLeavesLocalhostAloneAndRefusesTheNetwork(t *testing.T) {
+func TestWhatMayBeServedAndWhatMayNot(t *testing.T) {
+	// Two separate questions once the socket is reachable from off this
+	// machine: may anyone call it, and does the answer travel in the clear.
+	// Both have to be answered, and the second is the one that is easy to
+	// forget — an authenticated server on a plain socket is not more private
+	// than an unauthenticated one, it only looks it.
 	for _, c := range []struct {
-		addr    string
-		token   string
+		name    string
+		e       Exposure
 		wantErr bool
 	}{
-		{"127.0.0.1:8099", "", false},
-		{"[::1]:8099", "", false},
-		{"127.0.0.1:8099", "s3cret", false},
-		{"0.0.0.0:8099", "s3cret", false},
-		{"0.0.0.0:8099", "", true},
-		{":8099", "", true},
-		{"192.168.1.10:8099", "", true},
+		{"loopback needs nothing", Exposure{Addr: "127.0.0.1:8099"}, false},
+		{"ipv6 loopback too", Exposure{Addr: "[::1]:8099"}, false},
+		{"localhost by name", Exposure{Addr: "localhost:8099"}, false},
+		{"loopback with a token is still fine", Exposure{Addr: "127.0.0.1:8099", Token: "s"}, false},
+
+		{"every interface, no token", Exposure{Addr: ":8099"}, true},
+		{"a routable address, no token", Exposure{Addr: "192.168.1.10:8099"}, true},
+		{"all interfaces, no token", Exposure{Addr: "0.0.0.0:8099"}, true},
+
+		{"a token in cleartext off this machine", Exposure{Addr: "0.0.0.0:8099", Token: "s"}, true},
+		{"the same, over TLS", Exposure{Addr: "0.0.0.0:8099", Token: "s", TLS: true}, false},
+		{"the same, behind a terminator", Exposure{Addr: "0.0.0.0:8099", Token: "s", BehindTLSProxy: true}, false},
+
+		{"a proxy in front does not excuse having no token",
+			Exposure{Addr: "0.0.0.0:8099", BehindTLSProxy: true}, true},
+		{"nor does TLS", Exposure{Addr: "0.0.0.0:8099", TLS: true}, true},
+
+		{"a nonsense address is an error", Exposure{Addr: "not-an-address"}, true},
 	} {
-		err := CheckReachable(c.addr, c.token)
-		if (err != nil) != c.wantErr {
-			t.Errorf("CheckReachable(%q, token=%t) error = %v, want error: %t",
-				c.addr, c.token != "", err, c.wantErr)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.e.Check(); (err != nil) != c.wantErr {
+				t.Errorf("Check() error = %v, want error: %t", err, c.wantErr)
+			}
+		})
 	}
 }

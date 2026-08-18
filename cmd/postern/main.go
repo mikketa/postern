@@ -282,22 +282,34 @@ func runServe(args []string) error {
 		"file of urls a new identity browses once before its first solve")
 	imageSolver := fs.String("image-solver", "",
 		"command answering picture grids: it receives a PNG path and prints one x,y per line")
+	tlsCert := fs.String("tls-cert", "", "certificate file: serve HTTPS rather than HTTP")
+	tlsKey := fs.String("tls-key", "", "private key file, with -tls-cert")
+	behindProxy := fs.Bool("behind-tls-proxy", false,
+		"something in front of this already terminates TLS, so cleartext off this machine is intended")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if err := applyScreen(opts, *screen); err != nil {
 		return err
 	}
+	if (*tlsCert == "") != (*tlsKey == "") {
+		return errors.New("-tls-cert and -tls-key go together")
+	}
 
-	// Refuse to hand a browser fleet to the network with nothing in front of
-	// it. An error and not a warning on purpose: a warning printed at startup
-	// is read once, on the day it is set up, and never again.
+	// Refuse to hand a browser fleet, or the secret guarding it, to the
+	// network. An error and not a warning on purpose: a warning printed at
+	// startup is read once, on the day it is set up, and never again.
 	//
 	// Checked here rather than next to ListenAndServe so a misconfiguration
 	// costs nothing — below this line the next thing that happens is Chrome
 	// and an Xvfb starting, and it is galling to wait for them to come up only
 	// to be told the address was wrong.
-	if err := api.CheckReachable(*addr, api.Token()); err != nil {
+	if err := (api.Exposure{
+		Addr:           *addr,
+		Token:          api.Token(),
+		TLS:            *tlsCert != "",
+		BehindTLSProxy: *behindProxy,
+	}).Check(); err != nil {
 		return err
 	}
 
@@ -341,7 +353,15 @@ func runServe(args []string) error {
 
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", *addr, "profile", opts.UserDataDir)
+		scheme := "http"
+		if *tlsCert != "" {
+			scheme = "https"
+		}
+		log.Info("listening", "addr", *addr, "scheme", scheme, "profile", opts.UserDataDir)
+		if *tlsCert != "" {
+			errc <- srv.ListenAndServeTLS(*tlsCert, *tlsKey)
+			return
+		}
 		errc <- srv.ListenAndServe()
 	}()
 

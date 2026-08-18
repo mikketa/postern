@@ -20,31 +20,77 @@ const TokenEnv = "POSTERN_TOKEN"
 // Token returns the configured shared secret, empty when there is none.
 func Token() string { return os.Getenv(TokenEnv) }
 
-// CheckReachable refuses a configuration that would expose the solver to the
-// network with nothing in front of it.
+// Exposure is how the server is about to be reachable, and the only thing
+// that decides whether serving is safe.
+type Exposure struct {
+	// Addr is the listen address, as given to -addr.
+	Addr string
+
+	// Token is the shared secret, empty when there is none.
+	Token string
+
+	// TLS is whether this server terminates TLS itself.
+	TLS bool
+
+	// BehindTLSProxy is the operator saying a terminator sits in front, which
+	// is the one legitimate reason to carry a token over cleartext off this
+	// machine. Named for what it claims rather than for what it disables: an
+	// operator setting it should recognise their own deployment in it, and an
+	// operator who does not have a proxy should not be tempted.
+	BehindTLSProxy bool
+}
+
+// Check refuses a configuration that would hand the solver, or its secret, to
+// the network.
 //
-// Binding to localhost without a token is a reasonable single-operator setup.
-// Binding to anything else without one hands a browser fleet to whoever finds
-// the port, so it is an error rather than a warning: a warning at startup is
-// read once and never again.
-func CheckReachable(addr, token string) error {
-	if token != "" {
+// Loopback is nobody else's business and passes whatever it does. Off this
+// machine there are two separate questions, and both have to be answered:
+// whether anyone may call it, and whether the answer travels in the clear.
+func (e Exposure) Check() error {
+	reachable, err := offThisMachine(e.Addr)
+	if err != nil {
+		return err
+	}
+	if !reachable {
 		return nil
 	}
 
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return fmt.Errorf("api: cannot read the listen address %q: %w", addr, err)
-	}
-	if host == "" {
-		return fmt.Errorf("api: -addr %q listens on every interface with no "+
-			"authentication. Set %s, or bind to 127.0.0.1", addr, TokenEnv)
-	}
-	if ip := net.ParseIP(host); ip != nil && !ip.IsLoopback() {
+	if e.Token == "" {
 		return fmt.Errorf("api: -addr %q is reachable from off this machine and "+
-			"there is no authentication. Set %s, or bind to 127.0.0.1", addr, TokenEnv)
+			"there is no authentication. Set %s, or bind to 127.0.0.1", e.Addr, TokenEnv)
+	}
+
+	// A bearer token is a password, and this one is sent on every request.
+	// Over cleartext it is readable by anything on the path, so an
+	// authenticated server on a plain socket is not more private than an
+	// unauthenticated one — it only looks it.
+	if !e.TLS && !e.BehindTLSProxy {
+		return fmt.Errorf("api: -addr %q would send %s across the network in "+
+			"cleartext, where it is a password anyone on the path can read. "+
+			"Pass -tls-cert and -tls-key, or -behind-tls-proxy if something in "+
+			"front of this already terminates TLS", e.Addr, TokenEnv)
 	}
 	return nil
+}
+
+// offThisMachine reports whether an address is reachable by anything but this
+// host.
+func offThisMachine(addr string) (bool, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false, fmt.Errorf("api: cannot read the listen address %q: %w", addr, err)
+	}
+	// An empty host is every interface, which is the broadest of all.
+	if host == "" {
+		return true, nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return !ip.IsLoopback(), nil
+	}
+	// A name rather than an address: "localhost" is the only one that can be
+	// trusted without resolving, and resolving at startup would make the check
+	// depend on whatever DNS says today.
+	return host != "localhost", nil
 }
 
 // authenticated wraps a handler in a bearer-token check. An empty token leaves
