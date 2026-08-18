@@ -93,6 +93,72 @@ jobs:
 
       - run: go test -timeout 20m ./...
 
+  # The container image, built and actually run. An image that compiles is not
+  # an image that works: what breaks in here is Chromium failing to start under
+  # a container's default seccomp profile, and only starting it finds that.
+  image:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: postern:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Chromium's own sandbox needs to create a user namespace, which Docker's
+      # default seccomp profile blocks. Passing --no-sandbox instead was
+      # considered and rejected: the flag would have to be set where postern
+      # launches Chrome, so it would ship to every user and weaken a browser
+      # that has no container around it. Granting the syscall is the
+      # container's job, and it stays in the container.
+      - name: it starts, serves, and refuses what it should
+        run: |
+          docker run -d --name postern-ci \
+            --security-opt seccomp=unconfined \
+            -e POSTERN_TOKEN=ci-token \
+            -p 8099:8099 postern:ci
+
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8099/health >/dev/null 2>&1 && break
+            sleep 2
+          done
+
+          echo "health, no token:"
+          curl -fsS http://127.0.0.1:8099/health
+
+          echo "metrics without the token must be 401:"
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/metrics)
+          [ "$code" = "401" ] || { echo "got $code"; docker logs postern-ci; exit 1; }
+
+          echo "metrics with the token:"
+          curl -fsS -H "Authorization: Bearer ci-token" \
+            http://127.0.0.1:8099/metrics | head -3
+
+          echo "a real solve, against Cloudflare's always-passes dummy key:"
+          curl -fsS -X POST http://127.0.0.1:8099/solve \
+            -H "Authorization: Bearer ci-token" \
+            -d '{"url":"https://example.com","sitekey":"1x00000000000000000000AA"}'
+
+          docker rm -f postern-ci
+
+      # The other half of the contract: with no token it must refuse to listen
+      # on an address the network can reach, rather than start and hope.
+      - name: it refuses to be reachable with no token
+        run: |
+          if docker run --rm postern:ci 2>&1 | tee /tmp/out; then
+            echo "started with no POSTERN_TOKEN on 0.0.0.0 — the guard is not working"
+            exit 1
+          fi
+          grep -q "POSTERN_TOKEN" /tmp/out
+
   # Release binaries, built only for a tag. Cross-compiled from one runner:
   # postern drives an external Chrome and links nothing, so CGO stays off and
   # every target comes out of the same job.
