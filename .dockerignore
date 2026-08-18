@@ -1,0 +1,9 @@
+.git
+.github
+dist/
+postern
+postern-*
+profile/
+examples/__pycache__/
+docs/
+*.md
