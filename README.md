@@ -25,6 +25,7 @@
   <a href="#picture-challenges">Picture challenges</a> ·
   <a href="#running-it-at-volume">At volume</a> ·
   <a href="#how-it-works">How it works</a> ·
+  <a href="#in-a-container">Container</a> ·
   <a href="#flags">Flags</a>
 </p>
 
@@ -414,6 +415,35 @@ Cloudflare publishes dummy keys that work from any domain, including localhost:
 go test -short ./...    # no browser
 go test ./internal/...  # launches Chrome
 ```
+
+<br>
+
+## In a container
+
+```sh
+docker build -t postern .
+
+docker run -d -p 8099:8099 \
+  -e POSTERN_TOKEN="$(openssl rand -hex 32)" \
+  -v postern-profile:/home/postern/.config/postern \
+  --security-opt seccomp=unconfined \
+  postern
+```
+
+Chromium, Xvfb and real fonts, running as a non-root user. The volume is the point of
+mounting anything: the profile is what ages, and an identity that starts clean on every
+restart never matures.
+
+The image binds `0.0.0.0`, so **it will not start without `POSTERN_TOKEN`** — see
+[Authentication](#authentication). That is the guard working, not a bug.
+
+> [!WARNING]
+> `seccomp=unconfined` turns off syscall filtering for that container, which is more than
+> this needs. Chromium's own sandbox has to create a user namespace and most runtimes block
+> that syscall by default; the narrow fix is a seccomp profile that allows it, and the
+> broad one is above. Passing `--no-sandbox` instead was considered and rejected: the flag
+> would have to be set where postern launches Chrome, so it would ship to everyone,
+> including the people running no container at all.
 
 <br>
 
