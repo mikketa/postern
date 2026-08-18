@@ -170,7 +170,12 @@ postern_solve_slots_in_use 2
 ```
 
 Failures are counted and timed alongside successes — a solver measured only on the runs
-that worked reports a latency nobody experiences. No client library: the exposition format
+that worked reports a latency nobody experiences.
+
+On `SIGTERM` the listener closes at once and in-flight solves are given **`-timeout` plus
+fifteen seconds** to finish, because a solve may legally still be running for all of it.
+Size your orchestrator's grace period against that number — Kubernetes defaults to 30
+seconds, which is shorter than the default drain. A second signal stops immediately. No client library: the exposition format
 is small and stable, and the official one would roughly triple a dependency tree that is
 currently two entries, both of them chromedp.
 
