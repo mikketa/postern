@@ -134,10 +134,33 @@ curl -s localhost:8099/solve -d '{
 | `cdata` | string | no | Turnstile only |
 | `timeout_ms` | int | no | Lowers the server's timeout for this request. It cannot raise it |
 
-Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. A fleet with nothing
-rested returns **`503` with `Retry-After`**. A body over 64KB is `413`, and a misspelt
-field is `400` rather than a silent default. `GET /health` returns `{"status": "ok"}`,
-`GET /fleet` reports what each identity has done, and `GET /metrics` is below.
+`GET /health` returns `{"status": "ok"}`, `GET /fleet` reports what each identity has done,
+and `GET /metrics` is below.
+
+### When it fails
+
+Every error carries a machine-readable `code` beside the message, so branching on the cause
+does not mean matching strings:
+
+```json
+{ "code": "crossing_refused", "error": "solver: the challenge in front of the page never let us through — ..." }
+```
+
+| `code` | Status | What to do about it |
+| :--- | :---: | :--- |
+| `busy` | 503 | Every identity is resting. Back off — `Retry-After` says how long |
+| `timeout` | 502 | The budget ran out. Retry; raise `-timeout` if it is the usual answer |
+| `crossing_refused` | 502 | A challenge in front of the site refused us. The lever is the address |
+| `challenge_refused` | 502 | The vendor kept serving grids past the point it grades them. Same lever |
+| `vendor_error` | 502 | The widget reported a failure of its own — often a wrong sitekey or action |
+| `no_image_solver` | 501 | A picture grid arrived and nothing is configured to read it. Retrying will not help |
+| `invalid_request` | 400 | Missing fields, bad JSON, or a misspelt one — unknown fields are refused rather than ignored |
+| `body_too_large` | 413 | Over 64KB |
+| `unauthorized` | 401 | Missing or wrong bearer token |
+| `internal` | 500 | Unclassified. A rise here means a class is missing |
+
+The classes come from sentinel errors in the solver, matched with `errors.Is` — so a message
+can be reworded for whoever reads it without moving anybody's dashboard.
 
 ### Authentication
 
@@ -177,15 +200,21 @@ latency histogram, and the live fleet gauges. It sits behind the same token: how
 operation solves, and how well, is not public.
 
 ```
-postern_solves_total{kind="recaptcha-v2",outcome="token"} 41
-postern_solves_total{kind="recaptcha-v2",outcome="failed"} 6
+postern_solves_total{kind="recaptcha-v2",outcome="token",reason="ok"} 41
+postern_solves_total{kind="recaptcha-v2",outcome="failed",reason="crossing_refused"} 4
+postern_solves_total{kind="recaptcha-v2",outcome="failed",reason="timeout"} 2
 postern_solve_duration_seconds_bucket{le="15"} 38
 postern_fleet_identities_ready 7
 postern_solve_slots_in_use 2
 ```
 
 Failures are counted and timed alongside successes — a solver measured only on the runs
-that worked reports a latency nobody experiences.
+that worked reports a latency nobody experiences. They carry the same `reason` as the
+response, which is the difference between *the address is being refused* and *nobody
+configured a vision solver*: both are a falling success rate on a graph without it. Both
+labels come from closed sets, so the number of series is bounded by the code and not by
+traffic. A `busy` rejection is counted but kept out of the latency histogram — it never
+solved anything, and including it would drag every quantile toward zero.
 
 Every response carries **`X-Request-Id`**, and every log line about that solve carries the
 same value. Send your own and it is kept rather than replaced, so a caller that already
