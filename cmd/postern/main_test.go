@@ -44,3 +44,26 @@ func TestTheListeningSocketHasLimits(t *testing.T) {
 			"as a solver failure", srv.WriteTimeout, solveTimeout)
 	}
 }
+
+// TestDrainingOutlastsTheWorkItIsDraining is the rule a fixed number kept
+// getting wrong. Shutdown stops the listener at once; the window after that
+// has to fit the longest solve that could still be running, or a rolling
+// restart drops exactly the requests that cost the most to lose.
+func TestDrainingOutlastsTheWorkItIsDraining(t *testing.T) {
+	for _, timeout := range []time.Duration{
+		30 * time.Second, 60 * time.Second, 5 * time.Minute,
+	} {
+		if got := drainFor(timeout); got <= timeout {
+			t.Errorf("drainFor(%s) = %s, which is not longer than the solve it "+
+				"has to outlast — in-flight work would be cut off", timeout, got)
+		}
+	}
+
+	// And it must track -timeout rather than sit at a constant: raising the
+	// solve ceiling and leaving the drain behind is how this broke the first
+	// time.
+	if drainFor(5*time.Minute) <= drainFor(30*time.Second) {
+		t.Error("drainFor does not grow with the solve timeout, so a longer " +
+			"ceiling silently goes back to dropping the longest solves")
+	}
+}

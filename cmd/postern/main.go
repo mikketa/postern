@@ -352,7 +352,22 @@ func runServe(args []string) error {
 		}
 		return err
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Stop listening at once, then wait for what is already in flight.
+		//
+		// The window has to fit the work. It was five seconds, which is not
+		// enough for anything this program does: a solve may legally run for
+		// -timeout, so every rolling restart cut off whatever was mid-challenge
+		// — the caller had already spent the wait, and the identity had spent a
+		// challenge, for a connection that was dropped either way.
+		drain := drainFor(*timeout)
+
+		// Hand the signal back to the runtime, so a second one from an operator
+		// who meant it terminates immediately instead of being swallowed.
+		stop()
+		log.Info("draining before shutdown", "for", drain,
+			"note", "interrupt again to stop now")
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), drain)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)
 	}
@@ -450,4 +465,17 @@ func newHTTPServer(addr string, h http.Handler, timeout time.Duration) *http.Ser
 		// that, plus room to start a browser and write a reply, is the bound.
 		WriteTimeout: timeout + 30*time.Second,
 	}
+}
+
+// drainFor is how long to let in-flight solves finish after the listener
+// closes: the longest one that could legally be running, plus room to write
+// its answer.
+//
+// An orchestrator kills what has not exited by its own grace period — 30
+// seconds by default in Kubernetes — so this number is also the one to size
+// that against. It is deliberately derived from -timeout rather than fixed:
+// raising the solve ceiling without raising the drain would quietly go back to
+// dropping the longest solves, which are the ones that cost the most to lose.
+func drainFor(timeout time.Duration) time.Duration {
+	return timeout + 15*time.Second
 }
