@@ -135,8 +135,8 @@ curl -s localhost:8099/solve -d '{
 
 Errors come back as `{"error": "..."}` with a `4xx`/`5xx` status. A fleet with nothing
 rested returns **`503` with `Retry-After`**. A body over 64KB is `413`, and a misspelt
-field is `400` rather than a silent default. `GET /health` returns `{"status": "ok"}`, and
-`GET /fleet` reports what each identity has done.
+field is `400` rather than a silent default. `GET /health` returns `{"status": "ok"}`,
+`GET /fleet` reports what each identity has done, and `GET /metrics` is below.
 
 ### Authentication
 
@@ -153,6 +153,25 @@ curl -s localhost:8099/solve -H "Authorization: Bearer $POSTERN_TOKEN" -d '{...}
 An environment variable rather than a flag, for the same reason proxy credentials are
 stripped off `-proxy`: a command line is readable by every user on the machine through
 `/proc`.
+
+### Operating it
+
+`GET /metrics` reports in Prometheus text format — solve counts by vendor and outcome, a
+latency histogram, and the live fleet gauges. It sits behind the same token: how much an
+operation solves, and how well, is not public.
+
+```
+postern_solves_total{kind="recaptcha-v2",outcome="token"} 41
+postern_solves_total{kind="recaptcha-v2",outcome="failed"} 6
+postern_solve_duration_seconds_bucket{le="15"} 38
+postern_fleet_identities_ready 7
+postern_solve_slots_in_use 2
+```
+
+Failures are counted and timed alongside successes — a solver measured only on the runs
+that worked reports a latency nobody experiences. No client library: the exposition format
+is small and stable, and the official one would roughly triple a dependency tree that is
+currently two entries, both of them chromedp.
 
 > [!IMPORTANT]
 > **Without a token, `serve` refuses to bind to anything but loopback.** Not a warning —
