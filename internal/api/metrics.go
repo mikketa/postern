@@ -30,10 +30,13 @@ type Metrics struct {
 	count   int64
 }
 
-// outcome is one labelled counter.
+// outcome is one labelled counter. Both labels come from closed sets — the
+// vendor kinds the registry knows and the Reason constants — so the number of
+// series this can produce is bounded by the code rather than by traffic.
 type outcome struct {
 	kind   string
-	result string // "token", "failed"
+	result string // "token" or "failed"
+	reason Reason
 }
 
 // durationBounds are the upper edges of the latency histogram, in seconds.
@@ -51,7 +54,12 @@ func NewMetrics() *Metrics {
 }
 
 // Observe records one finished solve.
-func (m *Metrics) Observe(kind string, took time.Duration, solved bool) {
+//
+// A request turned away because the whole fleet was resting is recorded with a
+// zero duration: it is a real outcome an operator needs on the graph, but it
+// did not spend any time solving and putting it in the latency histogram would
+// drag every quantile toward nothing.
+func (m *Metrics) Observe(kind string, took time.Duration, solved bool, reason Reason) {
 	if kind == "" {
 		kind = "turnstile"
 	}
@@ -60,12 +68,16 @@ func (m *Metrics) Observe(kind string, took time.Duration, solved bool) {
 		result = "token"
 	}
 
-	seconds := took.Seconds()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.solves[outcome{kind: kind, result: result}]++
+	m.solves[outcome{kind: kind, result: result, reason: reason}]++
+
+	if reason == ReasonBusy {
+		return
+	}
+
+	seconds := took.Seconds()
 	m.count++
 	m.sum += seconds
 	for i, bound := range durationBounds {
@@ -82,8 +94,9 @@ func (m *Metrics) Write(w io.Writer, gauges map[string]int) {
 	m.mu.Lock()
 	rows := make([]string, 0, len(m.solves))
 	for o, n := range m.solves {
-		rows = append(rows, fmt.Sprintf("postern_solves_total{kind=%q,outcome=%q} %d",
-			o.kind, o.result, n))
+		rows = append(rows, fmt.Sprintf(
+			"postern_solves_total{kind=%q,outcome=%q,reason=%q} %d",
+			o.kind, o.result, o.reason, n))
 	}
 	buckets := append([]int64(nil), m.buckets...)
 	sum, count := m.sum, m.count
@@ -92,7 +105,7 @@ func (m *Metrics) Write(w io.Writer, gauges map[string]int) {
 	// Sorted so a diff between two scrapes is readable by a person.
 	sort.Strings(rows)
 
-	fmt.Fprintln(w, "# HELP postern_solves_total Solves finished, by vendor and outcome.")
+	fmt.Fprintln(w, "# HELP postern_solves_total Solves finished, by vendor, outcome and cause.")
 	fmt.Fprintln(w, "# TYPE postern_solves_total counter")
 	for _, r := range rows {
 		fmt.Fprintln(w, r)

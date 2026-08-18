@@ -67,7 +67,7 @@ func recovered(log *slog.Logger, next http.Handler) http.Handler {
 				"path", r.URL.Path,
 				"panic", v,
 				"stack", string(debug.Stack()))
-			writeError(w, http.StatusInternalServerError, "internal error")
+			writeFailure(w, ReasonInternal, "internal error")
 		}()
 		next.ServeHTTP(w, r)
 	})

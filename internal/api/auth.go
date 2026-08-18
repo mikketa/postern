@@ -108,7 +108,7 @@ func authenticated(token string, next http.Handler) http.Handler {
 		// length of the secret one request at a time.
 		if len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "missing or wrong bearer token")
+			writeFailure(w, ReasonUnauthorized, "missing or wrong bearer token")
 			return
 		}
 		next.ServeHTTP(w, r)

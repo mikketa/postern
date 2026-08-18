@@ -149,14 +149,14 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	if err := dec.Decode(&req); err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			writeFailure(w, ReasonTooLarge, "request body too large")
 			return
 		}
-		writeError(w, http.StatusBadRequest, "invalid json body: "+err.Error())
+		writeFailure(w, ReasonInvalid, "invalid json body: "+err.Error())
 		return
 	}
 	if req.URL == "" || req.SiteKey == "" {
-		writeError(w, http.StatusBadRequest, "url and sitekey are required")
+		writeFailure(w, ReasonInvalid, "url and sitekey are required")
 		return
 	}
 
@@ -175,19 +175,27 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		// Everything is resting. That is the fleet working as intended under
 		// more load than it has identities for, so say so plainly and let the
 		// caller back off rather than pretending the solve failed.
-		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size())
+		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size(),
+			"request_id", requestIDFrom(r.Context()))
 		w.Header().Set("Retry-After", "60")
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		// Counted, because a fleet turning callers away is the single most
+		// useful thing to see on a graph and it used to return before anything
+		// recorded it — the load that got a 503 was invisible.
+		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
+		writeFailure(w, ReasonBusy, err.Error())
 		return
 	}
 	solved := false
+	reason := ReasonInternal
 	started := time.Now()
 	defer func() {
 		give(solved)
 		// Recorded on every path out, including the ones that returned an
 		// error: a solver measured only on its successes reports a latency
-		// that no user experiences.
-		s.metrics.Observe(req.Kind, time.Since(started), solved)
+		// that no user experiences. The reason rides along so that a rise in
+		// failures says which kind, which is the difference between "the
+		// address is being refused" and "nobody configured a vision solver".
+		s.metrics.Observe(req.Kind, time.Since(started), solved, reason)
 	}()
 
 	result, err := solver.Solve(r.Context(), chrome, solver.Request{
@@ -200,15 +208,17 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		Log:         s.log.With("url", req.URL, "request_id", requestIDFrom(r.Context())),
 	}, timeout)
 	if err != nil {
+		reason = reasonFor(err)
 		// A client that walked away is not a solver failure worth logging.
 		if r.Context().Err() == nil {
-			s.log.Warn("solve failed", "url", req.URL, "err", err,
+			s.log.Warn("solve failed", "url", req.URL, "err", err, "code", reason,
 				"request_id", requestIDFrom(r.Context()))
 		}
-		writeError(w, http.StatusBadGateway, err.Error())
+		writeFailure(w, reason, err.Error())
 		return
 	}
 
+	reason = ReasonOK
 	solved = true
 	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed,
 		"request_id", requestIDFrom(r.Context()))
@@ -240,7 +250,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleFleet(w http.ResponseWriter, _ *http.Request) {
 	reporter, ok := s.fleet.(interface{ Stats() []pool.Identity })
 	if !ok {
-		writeError(w, http.StatusNotFound, "not serving from a fleet")
+		writeFailure(w, ReasonNoFleet, "not serving from a fleet")
 		return
 	}
 
@@ -282,8 +292,17 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+// writeFailure answers any error with its class alongside the message, so a
+// caller can branch without matching strings.
+//
+// Every error path goes through here. A code that is present on most responses
+// and absent on a few is worse than none at all: it invites a caller to depend
+// on it and then fails them on the one path they did not test.
+func writeFailure(w http.ResponseWriter, reason Reason, msg string) {
+	writeJSON(w, reason.status(), map[string]string{
+		"error": msg,
+		"code":  string(reason),
+	})
 }
 
 // handleMetrics renders the counters in Prometheus text format. It sits behind
