@@ -172,6 +172,11 @@ postern_solve_slots_in_use 2
 Failures are counted and timed alongside successes — a solver measured only on the runs
 that worked reports a latency nobody experiences.
 
+Every response carries **`X-Request-Id`**, and every log line about that solve carries the
+same value. Send your own and it is kept rather than replaced, so a caller that already
+traces requests can join the two sides. A panic returns `500` with a body instead of a
+dropped connection, which is otherwise indistinguishable from the network failing.
+
 On `SIGTERM` the listener closes at once and in-flight solves are given **`-timeout` plus
 fifteen seconds** to finish, because a solve may legally still be running for all of it.
 Size your orchestrator's grace period against that number — Kubernetes defaults to 30
