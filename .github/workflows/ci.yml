@@ -39,6 +39,19 @@ jobs:
       # is where a data race would hide.
       - run: go test -race -short ./...
 
+      # What vet does not: staticcheck found a mutex declared and never used on
+      # the fleet, with a comment claiming it guarded something. Harmless there
+      # — the pool has its own lock — but that is exactly the shape a real
+      # missing lock has, and nothing else was going to say so.
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.0 ./...
+
+      # Known vulnerabilities in anything we link, checked against the Go
+      # advisory database. A gate rather than a report: a dependency going bad
+      # between releases is not something to find out about from a user.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # The tests that drive a real browser: the display, the widget, the panel
   # reader. They need Chrome and a virtual display, and they talk to the
   # vendors' own demo endpoints — so they are allowed to fail without failing
