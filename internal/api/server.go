@@ -47,6 +47,11 @@ type Server struct {
 
 	// metrics is what /metrics reports.
 	metrics *Metrics
+
+	// jobs holds captchas submitted through the 2Captcha-compatible endpoints,
+	// which are poll-based and so need somewhere to put an answer between the
+	// call that asked for it and the call that collects it.
+	jobs *jobs
 }
 
 // New builds a Server over one shared browser. maxConcurrent below 1 is
@@ -78,6 +83,7 @@ func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSol
 		slots:       make(chan struct{}, maxConcurrent),
 		token:       Token(),
 		metrics:     NewMetrics(),
+		jobs:        newJobs(),
 	}
 }
 
@@ -88,10 +94,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /fleet", s.handleFleet)
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
+	s.twoCaptchaRoutes(mux)
 
 	guarded := authenticated(s.token, mux)
 	routed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if openPath(r.URL.Path) {
+		if bearerExempt(r.URL.Path) {
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -160,31 +167,56 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timeout := effectiveTimeout(req.TimeoutMS, s.timeout)
-
-	// Wait for a free slot, but give up if the client hangs up first.
-	select {
-	case s.slots <- struct{}{}:
-		defer func() { <-s.slots }()
-	case <-r.Context().Done():
+	result, reason, err := s.solveOnce(r.Context(), req, requestIDFrom(r.Context()))
+	if err != nil {
+		if reason == ReasonBusy {
+			w.Header().Set("Retry-After", "60")
+		}
+		if reason == ReasonCancelled {
+			// The caller is gone; there is nobody to answer.
+			return
+		}
+		writeFailure(w, reason, err.Error())
 		return
 	}
 
-	chrome, give, err := s.fleet.Borrow(r.Context())
+	writeJSON(w, http.StatusOK, solveResponse{
+		Token:     result.Token,
+		ElapsedMS: result.Elapsed.Milliseconds(),
+	})
+}
+
+// solveOnce is the whole of a solve: wait for a slot, borrow an identity,
+// drive the challenge, and account for what happened.
+//
+// It is deliberately protocol-free. Two front ends call it — the native
+// endpoint and the 2Captcha-compatible one — and a difference in how they
+// behave under load, or in what they count, would be a difference nobody
+// intended.
+func (s *Server) solveOnce(ctx context.Context, req solveRequest, id string) (*solver.Result, Reason, error) {
+	// Wait for a free slot, but give up if the caller has already gone.
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	case <-ctx.Done():
+		return nil, ReasonCancelled, ctx.Err()
+	}
+
+	chrome, give, err := s.fleet.Borrow(ctx)
 	if err != nil {
 		// Everything is resting. That is the fleet working as intended under
 		// more load than it has identities for, so say so plainly and let the
 		// caller back off rather than pretending the solve failed.
-		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size(),
-			"request_id", requestIDFrom(r.Context()))
-		w.Header().Set("Retry-After", "60")
+		//
 		// Counted, because a fleet turning callers away is the single most
 		// useful thing to see on a graph and it used to return before anything
 		// recorded it — the load that got a 503 was invisible.
+		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size(),
+			"request_id", id)
 		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
-		writeFailure(w, ReasonBusy, err.Error())
-		return
+		return nil, ReasonBusy, err
 	}
+
 	solved := false
 	reason := ReasonInternal
 	started := time.Now()
@@ -198,34 +230,29 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		s.metrics.Observe(req.Kind, time.Since(started), solved, reason)
 	}()
 
-	result, err := solver.Solve(r.Context(), chrome, solver.Request{
+	result, err := solver.Solve(ctx, chrome, solver.Request{
 		Kind:        solver.Kind(req.Kind),
 		URL:         req.URL,
 		SiteKey:     req.SiteKey,
 		Action:      req.Action,
 		CData:       req.CData,
 		ImageSolver: s.imageSolver,
-		Log:         s.log.With("url", req.URL, "request_id", requestIDFrom(r.Context())),
-	}, timeout)
+		Log:         s.log.With("url", req.URL, "request_id", id),
+	}, effectiveTimeout(req.TimeoutMS, s.timeout))
 	if err != nil {
 		reason = reasonFor(err)
-		// A client that walked away is not a solver failure worth logging.
-		if r.Context().Err() == nil {
+		// A caller that walked away is not a solver failure worth logging.
+		if ctx.Err() == nil {
 			s.log.Warn("solve failed", "url", req.URL, "err", err, "code", reason,
-				"request_id", requestIDFrom(r.Context()))
+				"request_id", id)
 		}
-		writeFailure(w, reason, err.Error())
-		return
+		return nil, reason, err
 	}
 
 	reason = ReasonOK
 	solved = true
-	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed,
-		"request_id", requestIDFrom(r.Context()))
-	writeJSON(w, http.StatusOK, solveResponse{
-		Token:     result.Token,
-		ElapsedMS: result.Elapsed.Milliseconds(),
-	})
+	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed, "request_id", id)
+	return result, ReasonOK, nil
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
