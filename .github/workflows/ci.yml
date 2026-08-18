@@ -121,10 +121,13 @@ jobs:
       # container's job, and it stays in the container.
       - name: it starts, serves, and refuses what it should
         run: |
+          # -behind-tls-proxy because there is no terminator in front of a CI
+          # container and postern will not carry a token over cleartext
+          # without being told the deployment means to.
           docker run -d --name postern-ci \
             --security-opt seccomp=unconfined \
             -e POSTERN_TOKEN=ci-token \
-            -p 8099:8099 postern:ci
+            -p 8099:8099 postern:ci -behind-tls-proxy
 
           for i in $(seq 1 60); do
             curl -fsS http://127.0.0.1:8099/health >/dev/null 2>&1 && break
@@ -149,15 +152,22 @@ jobs:
 
           docker rm -f postern-ci
 
-      # The other half of the contract: with no token it must refuse to listen
-      # on an address the network can reach, rather than start and hope.
-      - name: it refuses to be reachable with no token
+      # The other half of the contract, both halves of it: it must refuse to be
+      # reachable with no token at all, and refuse to carry the token in
+      # cleartext without being told a terminator is in front.
+      - name: it refuses to be reachable unsafely
         run: |
-          if docker run --rm postern:ci 2>&1 | tee /tmp/out; then
+          if docker run --rm postern:ci 2>&1 | tee /tmp/no-token; then
             echo "started with no POSTERN_TOKEN on 0.0.0.0 — the guard is not working"
             exit 1
           fi
-          grep -q "POSTERN_TOKEN" /tmp/out
+          grep -q "POSTERN_TOKEN" /tmp/no-token
+
+          if docker run --rm -e POSTERN_TOKEN=ci-token postern:ci 2>&1 | tee /tmp/cleartext; then
+            echo "started with a token on a plain socket — the secret would go out in the open"
+            exit 1
+          fi
+          grep -q "cleartext" /tmp/cleartext
 
   # Release binaries, built only for a tag. Cross-compiled from one runner:
   # postern drives an external Chrome and links nothing, so CGO stays off and

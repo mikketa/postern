@@ -50,7 +50,14 @@ EXPOSE 8099
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8099/health || exit 1
 
-# 0.0.0.0 because a container that binds to loopback is unreachable — and
-# postern refuses that address unless POSTERN_TOKEN is set, so running this
-# image without a token fails immediately and says why. That is deliberate.
+# 0.0.0.0 because a container that binds to loopback is unreachable by anything
+# outside it. Postern then refuses to start unless it is given both a token and
+# a way to protect it, so this image needs one more decision from whoever runs
+# it — and failing at startup with the reason is the point:
+#
+#   -e POSTERN_TOKEN=...  ... postern:tag -behind-tls-proxy
+#   -e POSTERN_TOKEN=...  ... postern:tag -tls-cert /certs/c.pem -tls-key /certs/k.pem
+#
+# Arguments given to `docker run` after the image name land here, because the
+# entrypoint is exec-form.
 ENTRYPOINT ["postern", "serve", "-addr", "0.0.0.0:8099"]
