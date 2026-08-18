@@ -90,13 +90,17 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	guarded := authenticated(s.token, mux)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	routed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if openPath(r.URL.Path) {
 			mux.ServeHTTP(w, r)
 			return
 		}
 		guarded.ServeHTTP(w, r)
 	})
+
+	// Outermost first: an id exists before anything can log it, and the
+	// recovery sits inside that so its log line can carry the id.
+	return withRequestID(recovered(s.log, routed))
 }
 
 // maxBodyBytes bounds a solve request. The body is a handful of short fields;
@@ -193,19 +197,21 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		Action:      req.Action,
 		CData:       req.CData,
 		ImageSolver: s.imageSolver,
-		Log:         s.log.With("url", req.URL),
+		Log:         s.log.With("url", req.URL, "request_id", requestIDFrom(r.Context())),
 	}, timeout)
 	if err != nil {
 		// A client that walked away is not a solver failure worth logging.
 		if r.Context().Err() == nil {
-			s.log.Warn("solve failed", "url", req.URL, "err", err)
+			s.log.Warn("solve failed", "url", req.URL, "err", err,
+				"request_id", requestIDFrom(r.Context()))
 		}
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 
 	solved = true
-	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed)
+	s.log.Info("solved", "url", req.URL, "elapsed", result.Elapsed,
+		"request_id", requestIDFrom(r.Context()))
 	writeJSON(w, http.StatusOK, solveResponse{
 		Token:     result.Token,
 		ElapsedMS: result.Elapsed.Milliseconds(),
