@@ -131,6 +131,15 @@ func (s *Server) Handler() http.Handler {
 	return withRequestID(recovered(s.log, routed))
 }
 
+// BuildVersion is what this binary was built as, set from main. Build
+// metadata is genuinely global, and threading it through three constructors to
+// reach one JSON field and one gauge would be worse than saying so.
+//
+// It is reported by /health and /metrics because during a rolling deploy the
+// question is always which instances are new, and answering it by connecting
+// to each machine is not answering it.
+var BuildVersion = "devel"
+
 // queuePerSlot is how many waiting jobs each concurrent slot may have behind
 // it. Ten, because a solve is seconds and a timeout is a minute: ten deep is
 // still reachable inside the budget, and a hundred is not.
@@ -294,9 +303,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	// resting is healthy and cannot take work, and a monitor needs to tell
 	// those apart from a server that is broken.
 	body := map[string]any{
-		"status": "ok",
-		"ready":  s.fleet.Ready(),
-		"size":   s.fleet.Size(),
+		"status":  "ok",
+		"version": BuildVersion,
+		"ready":   s.fleet.Ready(),
+		"size":    s.fleet.Size(),
 	}
 
 	// And it has to be able to say no. This answered 200 whatever had

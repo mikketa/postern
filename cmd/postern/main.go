@@ -286,6 +286,7 @@ func runServe(args []string) error {
 	tlsKey := fs.String("tls-key", "", "private key file, with -tls-cert")
 	behindProxy := fs.Bool("behind-tls-proxy", false,
 		"something in front of this already terminates TLS, so cleartext off this machine is intended")
+	logFormat := fs.String("log", "text", "log format: text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -313,7 +314,11 @@ func runServe(args []string) error {
 		return err
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log, err := newLogger(*logFormat, slog.LevelInfo)
+	if err != nil {
+		return err
+	}
+	api.BuildVersion = version
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -498,4 +503,22 @@ func newHTTPServer(addr string, h http.Handler, timeout time.Duration) *http.Ser
 // dropping the longest solves, which are the ones that cost the most to lose.
 func drainFor(timeout time.Duration) time.Duration {
 	return timeout + 15*time.Second
+}
+
+// newLogger builds the logger, in the format asked for.
+//
+// Text by default because a person reads it at a terminal; JSON because
+// nothing that collects logs at scale parses anything else, and a production
+// deployment that has to regex its own log lines is one that will eventually
+// regex them wrong.
+func newLogger(format string, level slog.Level) (*slog.Logger, error) {
+	opts := &slog.HandlerOptions{Level: level}
+	switch format {
+	case "", "text":
+		return slog.New(slog.NewTextHandler(os.Stderr, opts)), nil
+	case "json":
+		return slog.New(slog.NewJSONHandler(os.Stderr, opts)), nil
+	default:
+		return nil, fmt.Errorf("unknown -log %q, want text or json", format)
+	}
 }

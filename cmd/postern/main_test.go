@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -65,5 +66,23 @@ func TestDrainingOutlastsTheWorkItIsDraining(t *testing.T) {
 	if drainFor(5*time.Minute) <= drainFor(30*time.Second) {
 		t.Error("drainFor does not grow with the solve timeout, so a longer " +
 			"ceiling silently goes back to dropping the longest solves")
+	}
+}
+
+func TestTheLogFormatIsAChoiceAndABadOneIsRefused(t *testing.T) {
+	// Nothing that collects logs at scale parses anything but JSON, and a
+	// deployment that has to regex its own log lines will eventually regex
+	// them wrong.
+	for _, format := range []string{"", "text", "json"} {
+		if _, err := newLogger(format, slog.LevelInfo); err != nil {
+			t.Errorf("newLogger(%q) = %v, want a logger", format, err)
+		}
+	}
+	// And a typo is refused at startup rather than silently falling back:
+	// discovering the format was wrong by finding no parseable logs, during
+	// the incident the logs were for, is the wrong time.
+	if _, err := newLogger("jsonn", slog.LevelInfo); err == nil {
+		t.Error("a misspelt -log was accepted, and would be discovered as an " +
+			"absence of parseable logs at the worst possible moment")
 	}
 }

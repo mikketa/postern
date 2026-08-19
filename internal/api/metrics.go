@@ -124,6 +124,13 @@ func (m *Metrics) Write(w io.Writer, gauges map[string]int) {
 		strconv.FormatFloat(sum, 'f', 3, 64))
 	fmt.Fprintf(w, "postern_solve_duration_seconds_count %d\n", count)
 
+	// The conventional shape for build metadata: a gauge that is always 1,
+	// carrying the version as a label. It exists so a dashboard can group by
+	// version and see a deploy happen.
+	fmt.Fprintln(w, "# HELP postern_build_info The version this binary was built as.")
+	fmt.Fprintln(w, "# TYPE postern_build_info gauge")
+	fmt.Fprintf(w, "postern_build_info{version=%q} 1\n", BuildVersion)
+
 	names := make([]string, 0, len(gauges))
 	for n := range gauges {
 		names = append(names, n)
