@@ -185,7 +185,7 @@ func TestAFailedJobMapsToTheProtocolsOwnErrors(t *testing.T) {
 
 func TestTheWrongKeyIsRefusedOnBothEndpoints(t *testing.T) {
 	s := blockingServer()
-	s.token = "s3cret"
+	s.clients = SingleClient("s3cret")
 	handler := s.Handler()
 
 	for _, path := range []string{

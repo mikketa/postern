@@ -50,6 +50,13 @@ const (
 	// ReasonUnauthorized is a missing or wrong bearer token.
 	ReasonUnauthorized Reason = "unauthorized"
 
+	// ReasonQuota is this client's own rate limit, not the server's capacity.
+	// Distinct from ReasonBusy on purpose: busy means come back when the fleet
+	// frees up, and quota means come back when your own allowance refills. A
+	// caller that cannot tell them apart cannot tell "the server is loaded"
+	// from "you are asking for more than you bought".
+	ReasonQuota Reason = "quota_exceeded"
+
 	// ReasonTooLarge is a request body past what will be read.
 	ReasonTooLarge Reason = "body_too_large"
 
@@ -108,6 +115,11 @@ func (r Reason) status() int {
 		return http.StatusNotFound
 	case ReasonBusy:
 		return http.StatusServiceUnavailable
+	case ReasonQuota:
+		// 429 and not 503: the server has capacity, this caller has spent its
+		// allowance. A client that retries on 503 and gives up on 429 is
+		// behaving correctly in both cases only if we tell them apart.
+		return http.StatusTooManyRequests
 	case ReasonNoImageSolver:
 		// The server is missing a piece of its own configuration. Nothing the
 		// caller sent is wrong, and repeating the request will not fix it.

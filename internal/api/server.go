@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -49,10 +50,11 @@ type Server struct {
 	// grinding challenges is both slow and conspicuous.
 	slots chan struct{}
 
-	// token is the shared secret every route but the health check requires.
-	// Empty leaves the server open, which CheckReachable only tolerates on
-	// loopback.
-	token string
+	// clients is who may call, and what each is allowed to spend. Nil leaves
+	// the server open, which Exposure.Check only tolerates on loopback. A bare
+	// POSTERN_TOKEN loads as a single client, so nothing downstream needs to
+	// know which of the two the operator configured.
+	clients *Clients
 
 	// metrics is what /metrics reports.
 	metrics *Metrics
@@ -130,11 +132,25 @@ func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSol
 		imageSolver: imageSolver,
 		log:         log,
 		slots:       make(chan struct{}, maxConcurrent),
-		token:       Token(),
+		clients:     SingleClient(Token()),
 		metrics:     NewMetrics(),
 		jobs:        newJobs(),
 		queueDepth:  maxConcurrent * queuePerSlot,
 	}
+}
+
+// WithClients replaces the single-token client set with a loaded one. It
+// returns the server so it can be chained onto a constructor.
+//
+// Passing a set that defines no clients is ignored rather than treated as
+// "open": turning authentication off is a decision that belongs to the
+// operator leaving POSTERN_TOKEN unset, never to a file that failed to say
+// anything.
+func (s *Server) WithClients(c *Clients) *Server {
+	if c.Len() > 0 {
+		s.clients = c
+	}
+	return s
 }
 
 // Handler returns the routes, behind the bearer check when one is configured.
@@ -146,7 +162,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	s.twoCaptchaRoutes(mux)
 
-	guarded := authenticated(s.token, mux)
+	guarded := authenticated(s.clients, mux)
 	routed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if bearerExempt(r.URL.Path) {
 			mux.ServeHTTP(w, r)
@@ -228,6 +244,18 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.URL == "" || req.SiteKey == "" {
 		writeFailure(w, ReasonInvalid, "url and sitekey are required")
+		return
+	}
+
+	// This caller's own allowance, checked before a slot is taken so that a
+	// client over its quota cannot hold capacity away from one that is not.
+	// 429 and not 503: the server is fine, the request is not allowed.
+	client := clientFrom(r.Context())
+	if !client.allow() {
+		wait := client.retryAfter()
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())))
+		s.metrics.Observe(req.Kind, 0, false, ReasonQuota)
+		writeFailure(w, ReasonQuota, "quota exceeded, retry in "+wait.String())
 		return
 	}
 

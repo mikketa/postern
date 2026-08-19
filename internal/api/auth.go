@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net"
@@ -29,6 +30,11 @@ type Exposure struct {
 	// Token is the shared secret, empty when there is none.
 	Token string
 
+	// Clients is how many clients a -clients file defined. A client file is
+	// authentication just as much as a token is, and a deployment using one
+	// must not be told to set POSTERN_TOKEN as well.
+	Clients int
+
 	// TLS is whether this server terminates TLS itself.
 	TLS bool
 
@@ -55,9 +61,10 @@ func (e Exposure) Check() error {
 		return nil
 	}
 
-	if e.Token == "" {
+	if e.Token == "" && e.Clients == 0 {
 		return fmt.Errorf("api: -addr %q is reachable from off this machine and "+
-			"there is no authentication. Set %s, or bind to 127.0.0.1", e.Addr, TokenEnv)
+			"there is no authentication. Set %s, pass -clients, or bind to "+
+			"127.0.0.1", e.Addr, TokenEnv)
 	}
 
 	// A bearer token is a password, and this one is sent on every request.
@@ -65,10 +72,14 @@ func (e Exposure) Check() error {
 	// authenticated server on a plain socket is not more private than an
 	// unauthenticated one — it only looks it.
 	if !e.TLS && !e.BehindTLSProxy {
+		secret := TokenEnv
+		if e.Token == "" {
+			secret = "the client keys"
+		}
 		return fmt.Errorf("api: -addr %q would send %s across the network in "+
 			"cleartext, where it is a password anyone on the path can read. "+
 			"Pass -tls-cert and -tls-key, or -behind-tls-proxy if something in "+
-			"front of this already terminates TLS", e.Addr, TokenEnv)
+			"front of this already terminates TLS", e.Addr, secret)
 	}
 	return nil
 }
@@ -93,25 +104,54 @@ func offThisMachine(addr string) (bool, error) {
 	return host != "localhost", nil
 }
 
-// authenticated wraps a handler in a bearer-token check. An empty token leaves
-// it open, which is the single-operator-on-localhost case.
-func authenticated(token string, next http.Handler) http.Handler {
-	if token == "" {
+type clientKey struct{}
+
+// clientFrom returns the client behind a request, or nil when the server runs
+// with no authentication at all.
+func clientFrom(ctx context.Context) *Client {
+	c, _ := ctx.Value(clientKey{}).(*Client)
+	return c
+}
+
+// withClient attaches the caller to the context, so that everything
+// downstream — quota, job ownership, metrics, logs — can name it without
+// being handed it through every signature.
+func withClient(ctx context.Context, c *Client) context.Context {
+	return context.WithValue(ctx, clientKey{}, c)
+}
+
+// clientName is what to record for a request, including the case where there
+// is no authentication and so no client.
+func clientName(c *Client) string {
+	if c == nil {
+		return "anonymous"
+	}
+	return c.Name
+}
+
+// authenticated wraps a handler in a bearer-token check, resolving which
+// client presented the key. A nil set leaves it open, which is the
+// single-operator-on-localhost case.
+func authenticated(clients *Clients, next http.Handler) http.Handler {
+	if clients.Len() == 0 {
 		return next
 	}
-	want := []byte("Bearer " + token)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := []byte(r.Header.Get("Authorization"))
-		// Constant time, and length-padded: subtle.ConstantTimeCompare returns
-		// early on a length mismatch, so comparing straight would leak the
-		// length of the secret one request at a time.
-		if len(got) != len(want) || subtle.ConstantTimeCompare(got, want) != 1 {
+		header := r.Header.Get("Authorization")
+		key, ok := strings.CutPrefix(header, "Bearer ")
+		// The prefix is not a secret, so testing it plainly leaks nothing; the
+		// key itself is compared in constant time inside lookup.
+		client := (*Client)(nil)
+		if ok {
+			client = clients.lookup(key)
+		}
+		if client == nil {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			writeFailure(w, ReasonUnauthorized, "missing or wrong bearer token")
 			return
 		}
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(withClient(r.Context(), client)))
 	})
 }
 

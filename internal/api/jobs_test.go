@@ -30,7 +30,7 @@ func TestAJobThatIsNeverCollectedIsNotKeptForever(t *testing.T) {
 	j.swept = time.Now().Add(-sweepEvery - time.Second)
 	j.mu.Unlock()
 
-	if _, found := j.collect(id); found {
+	if _, found := j.collect(id, clientName(nil)); found {
 		t.Error("a job past its time to live is still held")
 	}
 }
@@ -64,7 +64,7 @@ func TestAnInFlightJobIsNotDroppedForAFinishedOne(t *testing.T) {
 		j.finish(id, "t", ReasonOK, nil)
 	}
 
-	if _, found := j.collect(inFlight); !found {
+	if _, found := j.collect(inFlight, clientName(nil)); !found {
 		t.Error("an in-flight job was evicted while finished ones were held — " +
 			"its client is still waiting and will never get an answer")
 	}
@@ -84,7 +84,7 @@ func TestCollectingReadsAConsistentSnapshot(t *testing.T) {
 		}
 	}()
 	for range 1000 {
-		if e, found := j.collect(id); found && e.finished && e.token == "" {
+		if e, found := j.collect(id, clientName(nil)); found && e.finished && e.token == "" {
 			t.Error("read a job marked finished with no token — a torn read")
 			break
 		}
@@ -94,8 +94,12 @@ func TestCollectingReadsAConsistentSnapshot(t *testing.T) {
 
 // mustStart takes an id with the queue bound out of the way, for tests that
 // are about something else.
+//
+// The job is owned by whoever an unauthenticated call is: the HTTP tests
+// collect through /res.php with no client configured, so the owner has to be
+// the one that path produces or every collection reads as somebody else's.
 func mustStart(j *jobs) string {
-	id, ok := j.start(maxJobs + 1)
+	id, ok := j.start(clientName(nil), maxJobs+1)
 	if !ok {
 		panic("the store refused a job with no bound in the way")
 	}
@@ -110,11 +114,11 @@ func TestASubmissionIsRefusedOnceTheQueueIsDeep(t *testing.T) {
 	j := newJobs()
 
 	for i := range depth {
-		if _, ok := j.start(depth); !ok {
+		if _, ok := j.start("owner", depth); !ok {
 			t.Fatalf("refused job %d of %d, before the queue was full", i+1, depth)
 		}
 	}
-	if _, ok := j.start(depth); ok {
+	if _, ok := j.start("owner", depth); ok {
 		t.Error("accepted a job past the queue depth — nothing is stopping a " +
 			"client from queueing more work than the fleet can ever reach")
 	}
@@ -125,14 +129,14 @@ func TestFinishingAJobMakesRoomForAnother(t *testing.T) {
 	const depth = 2
 	j := newJobs()
 
-	first, _ := j.start(depth)
-	j.start(depth)
-	if _, ok := j.start(depth); ok {
+	first, _ := j.start("owner", depth)
+	j.start("owner", depth)
+	if _, ok := j.start("owner", depth); ok {
 		t.Fatal("the queue did not fill")
 	}
 
 	j.finish(first, "token", ReasonOK, nil)
-	if _, ok := j.start(depth); !ok {
+	if _, ok := j.start("owner", depth); !ok {
 		t.Error("a finished job did not free its place — the queue only ever " +
 			"closes, and the server stops accepting work for good")
 	}

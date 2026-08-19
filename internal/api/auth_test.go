@@ -9,7 +9,7 @@ import (
 
 func guardedServer(token string) http.Handler {
 	s := serverFor(&stubFleet{ready: 1})
-	s.token = token
+	s.clients = SingleClient(token)
 	return s.Handler()
 }
 

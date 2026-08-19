@@ -28,6 +28,7 @@ import (
 const (
 	errWrongKey    = "ERROR_KEY_DOES_NOT_EXIST"
 	errNoSlot      = "ERROR_NO_SLOT_AVAILABLE"
+	errRateLimit   = "ERROR_NO_SLOT_AVAILABLE"
 	errUnsolvable  = "ERROR_CAPTCHA_UNSOLVABLE"
 	errNoSuchID    = "ERROR_NO_SUCH_CAPCHA_ID"
 	errNoMethod    = "ERROR_NO_SUCH_METHOD"
@@ -56,8 +57,19 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 	q := r.Form
 	asJSON := truthy(q.Get("json"))
 
-	if !s.keyOK(q.Get("key")) {
+	client, ok := s.resolveKey(q.Get("key"))
+	if !ok {
 		compatError(w, asJSON, errWrongKey)
+		return
+	}
+
+	// This client's own allowance, which is not the same thing as the fleet
+	// being full. The protocol has no separate word for it, so both come back
+	// as ERROR_NO_SLOT_AVAILABLE — the one string existing clients already
+	// back off on — but they are counted apart.
+	if !client.allow() {
+		s.metrics.Observe("", 0, false, ReasonQuota)
+		compatError(w, asJSON, errRateLimit)
 		return
 	}
 
@@ -71,8 +83,8 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 	// this, more waiting only means more timeouts. ERROR_NO_SLOT_AVAILABLE is
 	// the protocol's own word for it, and clients written against the real
 	// service already back off on it.
-	id, ok := s.jobs.start(s.queueDepth)
-	if !ok {
+	id, started := s.jobs.start(clientName(client), s.queueDepth)
+	if !started {
 		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
 		compatError(w, asJSON, errNoSlot)
 		return
@@ -100,7 +112,7 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 			effectiveTimeout(req.TimeoutMS, s.timeout)+30*time.Second)
 		defer cancel()
 
-		result, reason, err := s.solveOnce(ctx, req, "2captcha/"+id)
+		result, reason, err := s.solveOnce(withClient(ctx, client), req, "2captcha/"+id)
 		if err != nil {
 			s.jobs.finish(id, "", reason, err)
 			return
@@ -117,7 +129,8 @@ func (s *Server) handleRes(w http.ResponseWriter, r *http.Request) {
 	q := r.Form
 	asJSON := truthy(q.Get("json"))
 
-	if !s.keyOK(q.Get("key")) {
+	client, ok := s.resolveKey(q.Get("key"))
+	if !ok {
 		compatError(w, asJSON, errWrongKey)
 		return
 	}
@@ -135,7 +148,7 @@ func (s *Server) handleRes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, found := s.jobs.collect(q.Get("id"))
+	entry, found := s.jobs.collect(q.Get("id"), clientName(client))
 	if !found {
 		compatError(w, asJSON, errNoSuchID)
 		return
@@ -151,11 +164,18 @@ func (s *Server) handleRes(w http.ResponseWriter, r *http.Request) {
 	compatOK(w, asJSON, entry.token)
 }
 
-// keyOK checks the client key. With no token configured every key passes,
-// which matches the rest of the server: authentication is something an
-// operator turns on.
-func (s *Server) keyOK(key string) bool {
-	return s.token == "" || subtleEqual(key, s.token)
+// resolveKey identifies the client presenting a key.
+//
+// With no clients configured every key passes and there is no client, which
+// matches the rest of the server: authentication is something an operator
+// turns on. The nil Client that comes back is usable — allow() lets it
+// through and clientName() gives it a name — so no caller needs to branch.
+func (s *Server) resolveKey(key string) (*Client, bool) {
+	if s.clients.Len() == 0 {
+		return nil, true
+	}
+	c := s.clients.lookup(key)
+	return c, c != nil
 }
 
 // translate turns 2Captcha parameters into a solve request. It returns the

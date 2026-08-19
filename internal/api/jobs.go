@@ -35,6 +35,13 @@ type job struct {
 	created  time.Time
 	finished bool
 
+	// owner is the client that submitted this job. Ids are handed out in
+	// sequence because the protocol's own are numeric, so an unpredictable
+	// starting point is not on its own enough: with more than one client, an
+	// id that happens to land near somebody else's is otherwise a token
+	// anyone authenticated can walk to.
+	owner string
+
 	token  string
 	reason Reason
 	err    error
@@ -67,9 +74,10 @@ func newJobs() *jobs {
 	}
 }
 
-// start registers a new job and returns its id. It refuses past queueDepth
-// jobs still waiting, which is the caller's signal to come back later.
-func (j *jobs) start(queueDepth int) (string, bool) {
+// start registers a new job for owner and returns its id. It refuses past
+// queueDepth jobs still waiting, which is the caller's signal to come back
+// later.
+func (j *jobs) start(owner string, queueDepth int) (string, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
@@ -90,7 +98,7 @@ func (j *jobs) start(queueDepth int) (string, bool) {
 
 	j.next++
 	id := strconv.FormatUint(j.next, 10)
-	j.m[id] = &job{created: time.Now()}
+	j.m[id] = &job{created: time.Now(), owner: owner}
 	return id, true
 }
 
@@ -117,16 +125,23 @@ func (j *jobs) finish(id, token string, reason Reason, err error) {
 	}
 }
 
-// collect returns a job's state. found is false for an id that was never
-// issued, or that has expired — which the protocol cannot tell apart, and
-// neither can we without keeping every id ever issued forever.
-func (j *jobs) collect(id string) (entry job, found bool) {
+// collect returns a job's state, for its owner only.
+//
+// Somebody else's id reads exactly like an expired one — found is false, and
+// nothing distinguishes the two. Answering "that exists but is not yours"
+// would confirm the id, which is half of what an attacker walking the id
+// space is trying to learn.
+//
+// found is also false for an id that was never issued or that has expired,
+// which the protocol cannot tell apart, and neither can we without keeping
+// every id ever issued forever.
+func (j *jobs) collect(id, owner string) (entry job, found bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
 	j.sweepLocked()
 	e, ok := j.m[id]
-	if !ok {
+	if !ok || e.owner != owner {
 		return job{}, false
 	}
 	// Copied out, so the caller reads a consistent snapshot rather than a
