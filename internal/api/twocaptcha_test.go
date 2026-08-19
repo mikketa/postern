@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikketa/postern/internal/browser"
 	"github.com/mikketa/postern/internal/solver"
@@ -258,4 +259,34 @@ func get(t *testing.T, h http.Handler, path string) string {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 	return strings.TrimSpace(rec.Body.String())
+}
+
+func TestShutdownWaitsForWorkThatIsNotInARequest(t *testing.T) {
+	// A captcha submitted through this interface outlives the call that
+	// submitted it, so http.Server.Shutdown knows nothing about it. Without
+	// this the process exits from under the solve and its client polls for a
+	// job that no longer exists — during every deploy.
+	s := blockingServer()
+
+	post(t, s.Handler(), "/in.php",
+		"method=turnstile&sitekey=0x4A&pageurl=https://e.com")
+
+	// The stub blocks until its context ends, so the drain must not return.
+	quick, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := s.Drain(quick); err == nil {
+		t.Error("Drain returned while a submitted captcha was still running — " +
+			"the process would exit from under it")
+	}
+}
+
+func TestDrainReturnsWhenNothingIsRunning(t *testing.T) {
+	// And it must not hold a shutdown open for work that finished.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := blockingServer().Drain(ctx); err != nil {
+		t.Errorf("Drain(%v) with nothing in flight = %v, want nil — every "+
+			"shutdown would sit out the full grace period", ctx, err)
+	}
 }

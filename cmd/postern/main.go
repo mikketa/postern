@@ -394,7 +394,15 @@ func runServe(args []string) error {
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), drain)
 		defer cancel()
-		return srv.Shutdown(shutdownCtx)
+
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		// And then the work that is not inside a request: captchas submitted
+		// through the poll-based interface outlive the call that submitted
+		// them, so http.Server has no idea they exist. Shutting down without
+		// waiting means their clients poll for a job the process took with it.
+		return handler.Drain(shutdownCtx)
 	}
 }
 

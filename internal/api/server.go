@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/mikketa/postern/internal/browser"
@@ -66,6 +67,34 @@ type Server struct {
 	// smooths a burst, and one long enough that its tail times out before
 	// being reached is not a queue, it is a way of failing slowly.
 	queueDepth int
+
+	// detached counts the solves running outside any request — the ones
+	// submitted through the poll-based interface. http.Server.Shutdown knows
+	// nothing about them, so without this a deploy returns from a clean
+	// shutdown while they are still working, and the process exits from under
+	// them. Their clients then poll for a job that no longer exists.
+	detached sync.WaitGroup
+}
+
+// Drain waits for solves running outside any request to finish.
+//
+// Call it after the HTTP server has shut down: that stops new submissions, and
+// this waits out the ones already accepted. It gives up when ctx does, because
+// an orchestrator's patience is finite and a shutdown that never ends is
+// indistinguishable from a hang.
+func (s *Server) Drain(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		s.detached.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // New builds a Server over one shared browser. maxConcurrent below 1 is

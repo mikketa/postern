@@ -81,7 +81,9 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 	// The submitting request ends here; the solve outlives it. So it gets a
 	// context of its own — using the request's would cancel the work at the
 	// moment we answered, which is the one thing this protocol must not do.
+	s.detached.Add(1)
 	go func() {
+		defer s.detached.Done()
 		// This goroutine is outside the request, so it is outside the recovery
 		// middleware too: a panic in here has nothing between it and the
 		// process. Recovering is not tidiness, it is the difference between
