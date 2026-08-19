@@ -25,6 +25,14 @@ type Borrower interface {
 	Borrow(ctx context.Context) (*browser.Browser, func(solved bool), error)
 	Ready() int
 	Size() int
+
+	// Healthy reports why work cannot be done at all, or nil.
+	//
+	// Distinct from Ready, which is how much capacity is free right now: a
+	// server whose identities are all resting is healthy and busy, and must
+	// not be restarted for it. This is for the other thing — the browser died,
+	// or there are no identities to lend — where restarting is exactly right.
+	Healthy() error
 }
 
 // Server answers solve requests.
@@ -52,6 +60,12 @@ type Server struct {
 	// which are poll-based and so need somewhere to put an answer between the
 	// call that asked for it and the call that collects it.
 	jobs *jobs
+
+	// queueDepth is how many submitted captchas may be waiting at once. Sized
+	// from concurrency rather than fixed: a queue is only useful while it
+	// smooths a burst, and one long enough that its tail times out before
+	// being reached is not a queue, it is a way of failing slowly.
+	queueDepth int
 }
 
 // New builds a Server over one shared browser. maxConcurrent below 1 is
@@ -69,6 +83,12 @@ func (s shared) Borrow(context.Context) (*browser.Browser, func(bool), error) {
 }
 func (s shared) Ready() int { return 1 }
 func (s shared) Size() int  { return 1 }
+func (s shared) Healthy() error {
+	if !s.browser.Alive() {
+		return errors.New("chrome is not running")
+	}
+	return nil
+}
 
 // NewFleet builds a Server over anything that can lend a browser.
 func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSolver string, log *slog.Logger) *Server {
@@ -84,6 +104,7 @@ func NewFleet(fleet Borrower, timeout time.Duration, maxConcurrent int, imageSol
 		token:       Token(),
 		metrics:     NewMetrics(),
 		jobs:        newJobs(),
+		queueDepth:  maxConcurrent * queuePerSlot,
 	}
 }
 
@@ -109,6 +130,11 @@ func (s *Server) Handler() http.Handler {
 	// recovery sits inside that so its log line can carry the id.
 	return withRequestID(recovered(s.log, routed))
 }
+
+// queuePerSlot is how many waiting jobs each concurrent slot may have behind
+// it. Ten, because a solve is seconds and a timeout is a minute: ten deep is
+// still reachable inside the budget, and a hundred is not.
+const queuePerSlot = 10
 
 // maxBodyBytes bounds a solve request. The body is a handful of short fields;
 // anything beyond this is a mistake or an attack, and it matters because
@@ -241,6 +267,14 @@ func (s *Server) solveOnce(ctx context.Context, req solveRequest, id string) (*s
 	}, effectiveTimeout(req.TimeoutMS, s.timeout))
 	if err != nil {
 		reason = reasonFor(err)
+		// A cancellation is only the caller leaving if the caller actually
+		// left. Chrome dying under a solve also surfaces as context.Canceled,
+		// and calling that "client gone" hides a dead browser behind the one
+		// reason nobody investigates — measured: a killed Chrome was counted
+		// as a client hanging up, and the graph said everything was fine.
+		if reason == ReasonCancelled && ctx.Err() == nil {
+			reason = ReasonInternal
+		}
 		// A caller that walked away is not a solver failure worth logging.
 		if ctx.Err() == nil {
 			s.log.Warn("solve failed", "url", req.URL, "err", err, "code", reason,
@@ -259,11 +293,24 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	// Ready and size rather than a bare "ok": a server whose identities are all
 	// resting is healthy and cannot take work, and a monitor needs to tell
 	// those apart from a server that is broken.
-	writeJSON(w, http.StatusOK, map[string]any{
+	body := map[string]any{
 		"status": "ok",
 		"ready":  s.fleet.Ready(),
 		"size":   s.fleet.Size(),
-	})
+	}
+
+	// And it has to be able to say no. This answered 200 whatever had
+	// happened, which meant a server whose Chrome had died went on reporting
+	// that it was fine — nothing restarted it, and every request behind the
+	// green probe failed. A liveness check that cannot fail is worse than
+	// none: it is a false assurance rather than an absent one.
+	if err := s.fleet.Healthy(); err != nil {
+		body["status"] = "unavailable"
+		body["error"] = err.Error()
+		writeJSON(w, http.StatusServiceUnavailable, body)
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // handleFleet reports each identity and how it has been doing.

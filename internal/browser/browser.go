@@ -427,6 +427,20 @@ func (b *Browser) sizeWindow() chromedp.ActionFunc {
 }
 
 // Close terminates Chrome.
+// Alive reports whether Chrome is still running.
+//
+// chromedp cancels the browser context when it notices the connection has
+// gone, so this is the truth without a round trip. Measured, it is not
+// instant: killing Chrome leaves this reporting alive until something tries to
+// use the connection and finds it closed, which in practice is the next solve.
+// A health probe built on it therefore turns red within one failed request
+// rather than the moment the process dies — soon enough to matter, and worth
+// knowing before someone reads a green probe as proof.
+//
+// It says nothing about a browser that is running and wedged; that shows up as
+// tabs timing out.
+func (b *Browser) Alive() bool { return b.browserCtx.Err() == nil }
+
 func (b *Browser) Close() {
 	// Ask Chrome to shut down, and wait for it, rather than cancelling the
 	// context and killing it.

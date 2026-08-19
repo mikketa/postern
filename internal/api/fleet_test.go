@@ -19,6 +19,7 @@ type stubFleet struct {
 	identities []pool.Identity
 	ready      int
 	borrowErr  error
+	unhealthy  error
 }
 
 func (f *stubFleet) Borrow(context.Context) (*browser.Browser, func(bool), error) {
@@ -30,6 +31,7 @@ func (f *stubFleet) Borrow(context.Context) (*browser.Browser, func(bool), error
 func (f *stubFleet) Ready() int             { return f.ready }
 func (f *stubFleet) Size() int              { return len(f.identities) }
 func (f *stubFleet) Stats() []pool.Identity { return f.identities }
+func (f *stubFleet) Healthy() error         { return f.unhealthy }
 
 func serverFor(fleet Borrower) *Server {
 	return NewFleet(fleet, time.Second, 1, "", slog.New(slog.DiscardHandler))

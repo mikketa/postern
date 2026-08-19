@@ -1,11 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mikketa/postern/internal/pool"
 )
 
 // The endpoint is reachable by anything that can open a socket to it, so what
@@ -65,4 +68,49 @@ func TestACallerCannotAskForMoreTimeThanTheOperatorAllows(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheHealthCheckCanSayNo is the whole point of the endpoint. It used to
+// answer 200 whatever had happened, so a server whose Chrome had died went on
+// reporting that it was fine — nothing restarted it, and every request behind
+// the green probe failed. A liveness check that cannot fail is a false
+// assurance, which is worse than an absent one.
+func TestTheHealthCheckCanSayNo(t *testing.T) {
+	t.Run("healthy", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		serverFor(&stubFleet{ready: 1}).Handler().
+			ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("a working server answered %d", rec.Code)
+		}
+	})
+
+	t.Run("the browser is gone", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		serverFor(&stubFleet{unhealthy: errors.New("chrome is not running")}).Handler().
+			ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("a broken server answered %d, want %d — an orchestrator "+
+				"watching this would never restart it",
+				rec.Code, http.StatusServiceUnavailable)
+		}
+		if !strings.Contains(rec.Body.String(), "chrome is not running") {
+			t.Errorf("the reason is not in the body: %q", rec.Body.String())
+		}
+	})
+
+	t.Run("everyone resting is busy, not broken", func(t *testing.T) {
+		// The distinction that matters: a fleet with nothing free is working
+		// as designed and must not be restarted for it.
+		rec := httptest.NewRecorder()
+		serverFor(&stubFleet{ready: 0, identities: make([]pool.Identity, 3)}).Handler().
+			ServeHTTP(rec, httptest.NewRequest("GET", "/health", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("a fully-rested fleet answered %d — restarting it would "+
+				"throw away every profile's history", rec.Code)
+		}
+	})
 }

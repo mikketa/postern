@@ -2,6 +2,7 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -100,3 +101,16 @@ func (f *Fleet) Size() int { return f.pool.Size() }
 
 // Stats is every identity and how it has done.
 func (f *Fleet) Stats() []Identity { return f.pool.Stats() }
+
+// Healthy reports why the fleet can lend nobody at all, or nil.
+//
+// A fleet starts a browser per solve, so there is no long-lived process to
+// check the way there is for a single shared browser. What can be wrong is
+// structural: no identities to lend. Everyone resting is not that — it is the
+// fleet working, and Ready says so.
+func (f *Fleet) Healthy() error {
+	if f.pool.Size() == 0 {
+		return errors.New("no identities in the fleet")
+	}
+	return nil
+}
