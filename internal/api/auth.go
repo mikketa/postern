@@ -168,7 +168,9 @@ func authenticated(clients *Clients, next http.Handler) http.Handler {
 //     bearer as well would mean no existing client could reach them, which is
 //     the entire point of speaking that protocol.
 func bearerExempt(p string) bool {
-	return strings.HasPrefix(p, "/health") || p == "/in.php" || p == "/res.php"
+	return strings.HasPrefix(p, "/health") ||
+		strings.HasPrefix(p, APIVersion+"/health") ||
+		p == "/in.php" || p == "/res.php"
 }
 
 // subtleEqual compares two secrets in constant time, padded so that a length

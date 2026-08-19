@@ -262,3 +262,64 @@ func TestAnUnnamedCallerStillLandsOnTheCounter(t *testing.T) {
 		t.Errorf("an unauthenticated solve fell off the per-client counter:\n%s", buf.String())
 	}
 }
+
+// TestTheNativeRoutesAnswerUnderV1AndBare locks both halves: new callers get a
+// versioned path to point at, and every existing integration keeps working.
+func TestTheNativeRoutesAnswerUnderV1AndBare(t *testing.T) {
+	s := serverFor(&stubFleet{ready: 1})
+	handler := s.Handler()
+
+	for _, path := range []string{"/health", "/v1/health", "/metrics", "/v1/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s answered %d, want 200", path, rec.Code)
+		}
+	}
+
+	// /solve is asserted on routing rather than on outcome: what the stub
+	// fleet does with the request is another test's business, and the two
+	// paths must simply reach the same handler. A 404 on either is the failure
+	// this is here to catch.
+	codes := map[string]int{}
+	for _, path := range []string{"/solve", "/v1/solve"} {
+		req := httptest.NewRequest(http.MethodPost, path,
+			strings.NewReader(`{"url":"https://e.com","sitekey":"0x4A"}`))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		codes[path] = rec.Code
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("POST %s is not routed anywhere", path)
+		}
+	}
+	if codes["/solve"] != codes["/v1/solve"] {
+		t.Errorf("/solve answered %d and /v1/solve answered %d — they are meant "+
+			"to be the same handler", codes["/solve"], codes["/v1/solve"])
+	}
+}
+
+// TestTheVersionedHealthCheckIsStillOpen guards a pairing that is easy to
+// miss: /health is exempt from the bearer check so a load balancer can probe
+// it, and a versioned copy that is not exempt would fail every probe that
+// moved to it.
+func TestTheVersionedHealthCheckIsStillOpen(t *testing.T) {
+	s := serverFor(&stubFleet{ready: 1})
+	s.clients = SingleClient("alice-key-0123456789")
+	handler := s.Handler()
+
+	for _, path := range []string{"/health", "/v1/health"} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s with no token answered %d, want 200", path, rec.Code)
+		}
+	}
+	// And the versioned copy of a closed route is still closed.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/fleet", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /v1/fleet with no token answered %d, want 401 — the "+
+			"versioned path must not be a way around the bearer check", rec.Code)
+	}
+}

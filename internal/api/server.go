@@ -156,10 +156,31 @@ func (s *Server) WithClients(c *Clients) *Server {
 // Handler returns the routes, behind the bearer check when one is configured.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /solve", s.handleSolve)
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /fleet", s.handleFleet)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
+
+	// Every native route is served twice: under /v1 and at its bare path.
+	//
+	// /v1 is where a caller should point, and it is what lets a second shape
+	// of this API exist one day without breaking the first — a version in the
+	// path is the cheapest thing to add now and the most expensive to retrofit
+	// once clients are written. The bare paths stay because they are what
+	// every existing integration and every example already uses, and silently
+	// moving them would be a breaking change dressed as an improvement.
+	//
+	// The 2Captcha endpoints are not versioned and must not be: /in.php and
+	// /res.php are somebody else's protocol, and a client speaking it is
+	// pointed at a base URL and nothing more.
+	for _, r := range []struct {
+		method, path string
+		handler      http.HandlerFunc
+	}{
+		{"POST", "/solve", s.handleSolve},
+		{"GET", "/health", s.handleHealth},
+		{"GET", "/fleet", s.handleFleet},
+		{"GET", "/metrics", s.handleMetrics},
+	} {
+		mux.HandleFunc(r.method+" "+r.path, r.handler)
+		mux.HandleFunc(r.method+" "+APIVersion+r.path, r.handler)
+	}
 	s.twoCaptchaRoutes(mux)
 
 	guarded := authenticated(s.clients, mux)
@@ -175,6 +196,12 @@ func (s *Server) Handler() http.Handler {
 	// recovery sits inside that so its log line can carry the id.
 	return withRequestID(recovered(s.log, routed))
 }
+
+// APIVersion is the path prefix the native routes are also served under.
+//
+// It changes only when a response shape changes in a way a caller cannot
+// ignore — a new field is not that, a removed or repurposed one is.
+const APIVersion = "/v1"
 
 // BuildVersion is what this binary was built as, set from main. Build
 // metadata is genuinely global, and threading it through three constructors to
