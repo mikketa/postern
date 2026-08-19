@@ -1,6 +1,7 @@
 package display
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -122,5 +123,63 @@ func TestLockPath(t *testing.T) {
 	// start when it is there.
 	if got, want := lockPath(99), fmt.Sprintf("/tmp/.X%d-lock", 99); got != want {
 		t.Errorf("lockPath(99) = %q, want %q", got, want)
+	}
+}
+
+// TestHostModeStillNamesAnXDisplay guards the case that put a browser window
+// on the operator's desktop: -display host on a Wayland session, with DISPLAY
+// pointing at an X server they meant Chrome to use.
+//
+// Chrome chooses its backend before it reads DISPLAY, so unless the name comes
+// back from here — which is what makes Env() empty WAYLAND_DISPLAY — it
+// connects to the compositor and opens a real window, taking the pointer and
+// the focus of whoever is sitting there.
+func TestHostModeStillNamesAnXDisplay(t *testing.T) {
+	t.Setenv("DISPLAY", ":99")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+
+	d, err := Ensure(context.Background(), 1280, 800, Host)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	t.Cleanup(d.Close)
+
+	if d.Name != ":99" {
+		t.Fatalf("host mode reported display %q, want \":99\" — without the "+
+			"name nothing empties WAYLAND_DISPLAY", d.Name)
+	}
+	env := d.Env()
+	var sawDisplay, blankedWayland bool
+	for _, e := range env {
+		switch e {
+		case "DISPLAY=:99":
+			sawDisplay = true
+		case "WAYLAND_DISPLAY=":
+			blankedWayland = true
+		}
+	}
+	if !sawDisplay || !blankedWayland {
+		t.Errorf("env is %v, want DISPLAY=:99 and an emptied WAYLAND_DISPLAY — "+
+			"otherwise Chrome opens a window on the operator's desktop", env)
+	}
+}
+
+// TestHostModeOnAPureWaylandSessionIsLeftAlone is the other half: with no X
+// server to point at, the compositor is the only thing there is.
+func TestHostModeOnAPureWaylandSessionIsLeftAlone(t *testing.T) {
+	t.Setenv("DISPLAY", "")
+	t.Setenv("WAYLAND_DISPLAY", "wayland-1")
+
+	d, err := Ensure(context.Background(), 1280, 800, Host)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	t.Cleanup(d.Close)
+
+	if d.Name != "" {
+		t.Errorf("named display %q on a session that has no X server", d.Name)
+	}
+	if env := d.Env(); env != nil {
+		t.Errorf("env is %v, want nothing overridden", env)
 	}
 }

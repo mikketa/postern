@@ -83,10 +83,23 @@ type Display struct {
 // Ensure returns a display for Chrome to use.
 func Ensure(ctx context.Context, width, height int, mode Mode) (*Display, error) {
 	if mode == Host {
-		if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+		x11, wayland := os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY")
+		if x11 == "" && wayland == "" {
 			return nil, errors.New("display: -display host, but no session is running here")
 		}
-		return &Display{}, nil
+		// Carrying the name back matters on a Wayland session, where Chrome
+		// picks its backend before it looks at DISPLAY: told to use the host
+		// session it would find WAYLAND_DISPLAY, connect to the compositor and
+		// open a real window on the operator's desktop — even when DISPLAY
+		// points at an X server they meant it to use, an Xvfb included. That
+		// is not a cosmetic failure: the window takes their pointer and their
+		// focus. Naming the display here is what makes Env() empty
+		// WAYLAND_DISPLAY and ask for the x11 backend, the same as -display
+		// virtual does.
+		//
+		// With no DISPLAY at all the session really is Wayland and there is
+		// nothing else to use, so it is left alone.
+		return &Display{Name: x11}, nil
 	}
 	if mode != Virtual && mode != "" {
 		return nil, fmt.Errorf("display: unknown mode %q, want %q or %q", mode, Virtual, Host)
