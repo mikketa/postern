@@ -538,7 +538,7 @@ docker build -t postern .
 docker run -d -p 8099:8099 \
   -e POSTERN_TOKEN="$(openssl rand -hex 32)" \
   -v postern-profile:/home/postern/.config/postern \
-  --security-opt seccomp=unconfined \
+  --security-opt seccomp=unconfined --shm-size=1g \
   postern -behind-tls-proxy
 ```
 

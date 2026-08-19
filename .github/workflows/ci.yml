@@ -124,8 +124,11 @@ jobs:
           # -behind-tls-proxy because there is no terminator in front of a CI
           # container and postern will not carry a token over cleartext
           # without being told the deployment means to.
+          # --shm-size because Chrome puts renderer shared memory in /dev/shm
+          # and Docker's default 64M is not enough for it.
           docker run -d --name postern-ci \
             --security-opt seccomp=unconfined \
+            --shm-size=1g \
             -e POSTERN_TOKEN=ci-token \
             -p 8099:8099 postern:ci -behind-tls-proxy
 
@@ -160,6 +163,19 @@ jobs:
           curl -fsS -X POST http://127.0.0.1:8099/solve \
             -H "Authorization: Bearer ci-token" \
             -d '{"url":"https://example.com","sitekey":"1x00000000000000000000AA"}'
+
+          echo "the 2captcha front end, end to end:"
+          id=$(curl -fsS -X POST http://127.0.0.1:8099/in.php \
+            -d "key=ci-token&method=turnstile&sitekey=1x00000000000000000000AA&pageurl=https://example.com")
+          echo "in.php: $id"
+          case "$id" in OK\|*) ;; *) echo "in.php did not accept the job"; exit 1;; esac
+          for i in $(seq 1 20); do
+            r=$(curl -fsS "http://127.0.0.1:8099/res.php?key=ci-token&action=get&id=${id#OK|}")
+            [ "$r" = CAPCHA_NOT_READY ] || break
+            sleep 3
+          done
+          echo "res.php: $r"
+          case "$r" in OK\|*) ;; *) echo "the job never produced a token"; docker logs postern-ci | tail -30; exit 1;; esac
 
           docker rm -f postern-ci
 
