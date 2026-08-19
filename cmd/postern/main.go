@@ -286,6 +286,9 @@ func runServe(args []string) error {
 	tlsKey := fs.String("tls-key", "", "private key file, with -tls-cert")
 	behindProxy := fs.Bool("behind-tls-proxy", false,
 		"something in front of this already terminates TLS, so cleartext off this machine is intended")
+	clientsFile := fs.String("clients", "",
+		"file of clients, one \"name key [solves-per-minute]\" per line: each gets its own "+
+			"key, its own quota and its own jobs. Replaces POSTERN_TOKEN")
 	logFormat := fs.String("log", "text", "log format: text or json")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -305,9 +308,23 @@ func runServe(args []string) error {
 	// costs nothing — below this line the next thing that happens is Chrome
 	// and an Xvfb starting, and it is galling to wait for them to come up only
 	// to be told the address was wrong.
+	// Loaded before the exposure check, because a client file is
+	// authentication just as much as a token is and the check has to know
+	// about it — and because a malformed one should be reported now rather
+	// than after Chrome has come up.
+	var clients *api.Clients
+	if *clientsFile != "" {
+		loaded, err := api.LoadClients(*clientsFile)
+		if err != nil {
+			return err
+		}
+		clients = loaded
+	}
+
 	if err := (api.Exposure{
 		Addr:           *addr,
 		Token:          api.Token(),
+		Clients:        clients.Len(),
 		TLS:            *tlsCert != "",
 		BehindTLSProxy: *behindProxy,
 	}).Check(); err != nil {
@@ -332,7 +349,7 @@ func runServe(args []string) error {
 			return err
 		}
 		defer closeBrowser()
-		handler = api.New(b, *timeout, *concurrency, *imageSolver, log)
+		handler = api.New(b, *timeout, *concurrency, *imageSolver, log).WithClients(clients)
 	} else {
 		// The fleet starts its browsers itself, so the screen they draw on has
 		// to be started here and shared: one Xvfb for all of them, not one per
@@ -351,7 +368,14 @@ func runServe(args []string) error {
 			return err
 		}
 		log.Info("serving from a fleet", "identities", fleet.Size(), "ready", fleet.Ready())
-		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log)
+		handler = api.NewFleet(fleet, *timeout, *concurrency, *imageSolver, log).WithClients(clients)
+	}
+
+	if n := clients.Len(); n > 0 {
+		// Named at startup because a key that silently did not load is
+		// indistinguishable, from the outside, from a client that has not
+		// integrated yet.
+		log.Info("clients loaded", "count", n, "names", strings.Join(clients.Names(), ","))
 	}
 
 	srv := newHTTPServer(*addr, handler.Handler(), *timeout)
