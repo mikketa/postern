@@ -536,6 +536,7 @@ the target.
 | `-tls-cert` | none | Certificate file: serve HTTPS rather than HTTP |
 | `-tls-key` | none | Private key file, with `-tls-cert` |
 | `-behind-tls-proxy` | `false` | Something in front already terminates TLS, so cleartext off this machine is intended |
+| `-clients` | none | Client file, one `name key [solves-per-minute]` per line. Replaces `POSTERN_TOKEN` — see [above](#more-than-one-caller) |
 | `-log` | `text` | Log format: `text` for a person, `json` for anything that collects them |
 
 `serve` also reads **`POSTERN_TOKEN`** from the environment — see
