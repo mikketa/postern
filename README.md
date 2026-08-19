@@ -39,6 +39,18 @@ No token farm. No paid captcha API. No headless browser dressed up to look human
 Postern launches the Chrome already on the machine, gives it a screen nobody is looking
 at, renders the widget itself, and hands back the token.
 
+<p align="center">
+  <img src="docs/demo.gif" alt="postern reading a reCAPTCHA picture grid and clicking the buses" width="560">
+</p>
+
+<p align="center">
+  <sub>
+    A real solve on Google's reCAPTCHA demo page, at 2× — nothing is edited out.
+    The first grid is refused, the second one is graded, and the token comes back.
+    Recorded on an Xvfb display, which is why no window appears on anyone's desktop.
+  </sub>
+</p>
+
 > [!NOTE]
 > A postern is the small side door of a fortress — the one you walk through instead of
 > attacking the wall.
