@@ -110,6 +110,8 @@ jobs:
           context: .
           load: true
           tags: postern:ci
+          build-args: |
+            VERSION=ci-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -150,6 +152,11 @@ jobs:
 
           echo "health, no token:"
           curl -fsS http://127.0.0.1:8099/health
+
+          # A container that cannot say which build it is cannot be operated.
+          echo "the reported version must not be the placeholder:"
+          curl -fsS http://127.0.0.1:8099/health | grep -q "ci-${{ github.sha }}" || {
+            echo "the image reports no build version"; exit 1; }
 
           echo "metrics without the token must be 401:"
           code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/metrics)

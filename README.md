@@ -533,7 +533,7 @@ go test ./internal/...  # launches Chrome
 ## In a container
 
 ```sh
-docker build -t postern .
+docker build -t postern --build-arg VERSION="$(git describe --tags --always)" .
 
 docker run -d -p 8099:8099 \
   -e POSTERN_TOKEN="$(openssl rand -hex 32)" \

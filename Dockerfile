@@ -10,9 +10,16 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# The version the image reports on /health and in postern_build_info. Without
+# it every container calls itself "devel" and nothing on the outside can tell
+# which build is running — pass --build-arg VERSION=v1.2.3 when tagging one.
+ARG VERSION=devel
+
 # Static: the runtime stage has no Go toolchain and postern links nothing —
 # it drives an external browser over a socket.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /postern ./cmd/postern
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+        -o /postern ./cmd/postern
 
 FROM debian:trixie-slim
 
