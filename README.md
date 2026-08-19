@@ -135,6 +135,12 @@ curl -s localhost:8099/solve -d '{
 | `cdata` | string | no | Turnstile only |
 | `timeout_ms` | int | no | Lowers the server's timeout for this request. It cannot raise it |
 
+Every native route is also served under **`/v1`** — `/v1/solve`, `/v1/health`, `/v1/fleet`,
+`/v1/metrics`. Point new integrations there: a version in the path is the cheapest thing to
+add now and the most expensive to retrofit once clients are written. The bare paths are not
+going anywhere, since they are what every existing integration uses. The 2Captcha endpoints
+are deliberately *not* versioned: `/in.php` and `/res.php` are somebody else's protocol.
+
 `GET /fleet` reports what each identity has done, and `GET /metrics` is below.
 
 `GET /health` answers `200` with the running version and how much of the fleet is free — and
@@ -156,6 +162,7 @@ does not mean matching strings:
 | `code` | Status | What to do about it |
 | :--- | :---: | :--- |
 | `busy` | 503 | Every identity is resting. Back off — `Retry-After` says how long |
+| `quota_exceeded` | 429 | This caller is past its own rate, and nobody else is affected. `Retry-After` says when |
 | `timeout` | 502 | The budget ran out. Retry; raise `-timeout` if it is the usual answer |
 | `crossing_refused` | 502 | A challenge in front of the site refused us. The lever is the address |
 | `challenge_refused` | 502 | The vendor kept serving grids past the point it grades them. Same lever |
@@ -200,6 +207,46 @@ The second flag is named for what it claims rather than for what it turns off. A
 who has a terminator should recognise their own deployment in it; one who does not should
 not be tempted by it.
 
+### More than one caller
+
+`POSTERN_TOKEN` is one key for one operator. To serve several callers, give each its own
+key and its own allowance:
+
+```
+# clients — one "name key [solves-per-minute]" per line
+alice   $(openssl rand -hex 24)   30
+bob     $(openssl rand -hex 24)
+```
+
+```sh
+chmod 600 clients
+postern serve -addr 0.0.0.0:8099 -clients clients -behind-tls-proxy
+```
+
+The file is a list of passwords, so postern **refuses to start if anyone else can read
+it**. It also refuses two clients sharing a key, the same name twice, and a key under 16
+characters — each of those makes some later answer ambiguous, and a startup error is the
+only complaint nobody scrolls past.
+
+The rate column is optional and is sustained solves per minute, with up to a minute's
+worth of burst; a client with no column is unlimited. Over it, the answer is **`429` with
+`Retry-After`**, not `503`. The difference matters to a client that behaves correctly:
+`503` means the server is loaded and everyone should back off, `429` means this caller has
+spent its own allowance and nobody else is affected.
+
+Each client also gets **its own jobs**. Ids are handed out in sequence because that is what
+the 2Captcha protocol uses, so without ownership any authenticated caller could walk the id
+space and collect tokens somebody else paid for. Another client's id reads exactly like an
+expired one — answering differently would confirm the id exists.
+
+And each is counted separately, which is what a billing question and a noisy-neighbour
+question both need:
+
+```
+postern_client_solves_total{client="alice",outcome="token"} 412
+postern_client_solves_total{client="alice",outcome="failed"} 17
+```
+
 ### Drop-in for an existing client
 
 Postern also speaks the 2Captcha legacy interface, so a client already written against one
@@ -243,6 +290,13 @@ what this protocol does and what its clients are written to read.
 > queue in the same slots and land in the same metrics. `/solve` is the better shape — one
 > request, one answer, a real status code, a `code` you can branch on — and worth moving to.
 > This one is here so nobody has to before they have tried it.
+
+Submitted jobs live in memory and **do not survive a restart**, on purpose. A captcha token
+is worth nothing minutes after it is issued, so a store that survived a restart would come
+back full of answers to questions nobody is asking any more. A client polling for a job from
+before the restart gets `ERROR_NO_SUCH_CAPCHA_ID` — the same answer the real service gives
+for an expired id, and the one every client already handles by submitting again. It never
+polls forever.
 
 ### Operating it
 
