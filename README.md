@@ -542,9 +542,20 @@ docker run -d -p 8099:8099 \
   postern -behind-tls-proxy
 ```
 
-Chromium, Xvfb and real fonts, running as a non-root user. The volume is the point of
-mounting anything: the profile is what ages, and an identity that starts clean on every
-restart never matures.
+Google Chrome, Xvfb and real fonts, running as a non-root user. Chrome and not Debian's
+chromium: chromium reports itself as such in its user agent and ships without the
+proprietary codecs, and both are fingerprinting signals on their own.
+
+The volume is the point of mounting anything: the profile is what ages, and an identity
+that starts clean on every restart never matures.
+
+The two flags are not optional. `--shm-size` because Chrome puts renderer shared memory
+in `/dev/shm`, where Docker's 64M default is not enough for it; `--security-opt
+seccomp=unconfined` because Chrome's own sandbox creates a user namespace, which Docker's
+default seccomp profile blocks. Passing `--no-sandbox` instead was considered and
+rejected: that flag would have to be set where postern launches Chrome, so it would ship
+to every user and weaken a browser that has no container around it. Granting the syscall
+is the container's job, and it stays in the container.
 
 The image binds `0.0.0.0`, so it will not start without `POSTERN_TOKEN`, and not without
 being told how the token is protected — `-behind-tls-proxy` above, or `-tls-cert` and
