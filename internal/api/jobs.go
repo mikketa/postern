@@ -67,12 +67,23 @@ func newJobs() *jobs {
 	}
 }
 
-// start registers a new job and returns its id.
-func (j *jobs) start() string {
+// start registers a new job and returns its id. It refuses past queueDepth
+// jobs still waiting, which is the caller's signal to come back later.
+func (j *jobs) start(queueDepth int) (string, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
 	j.sweepLocked()
+
+	// Accepting work there is no prospect of doing is not politeness, it is a
+	// worse failure deferred: each waiting job holds a goroutine, a context
+	// and a timer, and every one of them will time out having never reached a
+	// browser. Refusing now costs the caller a retry; accepting costs it the
+	// whole timeout and costs us the queue.
+	if j.pendingLocked() >= queueDepth {
+		return "", false
+	}
+
 	if len(j.m) >= maxJobs {
 		j.dropOldestLocked()
 	}
@@ -80,7 +91,18 @@ func (j *jobs) start() string {
 	j.next++
 	id := strconv.FormatUint(j.next, 10)
 	j.m[id] = &job{created: time.Now()}
-	return id
+	return id, true
+}
+
+// pendingLocked counts the jobs still waiting for an answer.
+func (j *jobs) pendingLocked() int {
+	n := 0
+	for _, e := range j.m {
+		if !e.finished {
+			n++
+		}
+	}
+	return n
 }
 
 // finish records the outcome of a job. An id that has already been swept is

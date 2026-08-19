@@ -150,7 +150,7 @@ func TestAnUnfinishedJobIsNotReadyAndAnUnknownOneIsNot(t *testing.T) {
 
 func TestAFinishedJobHandsOverItsToken(t *testing.T) {
 	s := serverFor(&stubFleet{ready: 1})
-	id := s.jobs.start()
+	id := mustStart(s.jobs)
 	s.jobs.finish(id, "0.qF8mZ2", ReasonOK, nil)
 
 	if body := get(t, s.Handler(), "/res.php?action=get&id="+id); body != "OK|0.qF8mZ2" {
@@ -173,7 +173,7 @@ func TestAFailedJobMapsToTheProtocolsOwnErrors(t *testing.T) {
 		{ReasonInvalid, errBadParams},
 	} {
 		s := serverFor(&stubFleet{ready: 1})
-		id := s.jobs.start()
+		id := mustStart(s.jobs)
 		s.jobs.finish(id, "", c.reason, errFailed)
 
 		if body := get(t, s.Handler(), "/res.php?action=get&id="+id); body != c.want {

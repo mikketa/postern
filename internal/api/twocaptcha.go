@@ -67,7 +67,16 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := s.jobs.start()
+	// The queue is bounded by what the fleet can actually get through: past
+	// this, more waiting only means more timeouts. ERROR_NO_SLOT_AVAILABLE is
+	// the protocol's own word for it, and clients written against the real
+	// service already back off on it.
+	id, ok := s.jobs.start(s.queueDepth)
+	if !ok {
+		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
+		compatError(w, asJSON, errNoSlot)
+		return
+	}
 
 	// The submitting request ends here; the solve outlives it. So it gets a
 	// context of its own — using the request's would cancel the work at the
