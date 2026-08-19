@@ -68,7 +68,7 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 	// as ERROR_NO_SLOT_AVAILABLE — the one string existing clients already
 	// back off on — but they are counted apart.
 	if !client.allow() {
-		s.metrics.Observe("", 0, false, ReasonQuota)
+		s.metrics.Observe(clientName(client), "", 0, false, ReasonQuota)
 		compatError(w, asJSON, errRateLimit)
 		return
 	}
@@ -85,7 +85,7 @@ func (s *Server) handleIn(w http.ResponseWriter, r *http.Request) {
 	// service already back off on it.
 	id, started := s.jobs.start(clientName(client), s.queueDepth)
 	if !started {
-		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
+		s.metrics.Observe(clientName(client), req.Kind, 0, false, ReasonBusy)
 		compatError(w, asJSON, errNoSlot)
 		return
 	}

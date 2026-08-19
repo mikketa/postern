@@ -225,3 +225,40 @@ func TestGoingOverQuotaIs429AndNot503(t *testing.T) {
 		t.Errorf("body %q does not carry the %q code", last.Body.String(), ReasonQuota)
 	}
 }
+
+// TestEachClientIsCountedSeparately is what makes billing and a
+// noisy-neighbour question answerable. The counter deliberately carries only
+// the caller and the outcome: crossing it with the vendor and the reason would
+// multiply the series instead of adding to them.
+func TestEachClientIsCountedSeparately(t *testing.T) {
+	m := NewMetrics()
+	m.Observe("alice", "turnstile", time.Second, true, ReasonOK)
+	m.Observe("alice", "turnstile", time.Second, true, ReasonOK)
+	m.Observe("bob", "recaptcha", time.Second, false, ReasonTimeout)
+
+	var buf strings.Builder
+	m.Write(&buf, nil)
+	out := buf.String()
+
+	for _, want := range []string{
+		`postern_client_solves_total{client="alice",outcome="token"} 2`,
+		`postern_client_solves_total{client="bob",outcome="failed"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics do not carry %s", want)
+		}
+	}
+}
+
+func TestAnUnnamedCallerStillLandsOnTheCounter(t *testing.T) {
+	// A server with no authentication has no client, and a solve that is not
+	// counted at all is worse than one counted as anonymous.
+	m := NewMetrics()
+	m.Observe("", "turnstile", time.Second, true, ReasonOK)
+
+	var buf strings.Builder
+	m.Write(&buf, nil)
+	if !strings.Contains(buf.String(), `client="anonymous"`) {
+		t.Errorf("an unauthenticated solve fell off the per-client counter:\n%s", buf.String())
+	}
+}

@@ -19,7 +19,7 @@ func TestBucketsAreCumulativeAndEndAtInfinity(t *testing.T) {
 	for _, d := range []time.Duration{
 		500 * time.Millisecond, 3 * time.Second, 12 * time.Second, 200 * time.Second,
 	} {
-		m.Observe("turnstile", d, true, ReasonOK)
+		m.Observe("alice", "turnstile", d, true, ReasonOK)
 	}
 
 	var out strings.Builder
@@ -65,8 +65,8 @@ func TestAFailedSolveIsCountedToo(t *testing.T) {
 	// A solver measured only on its successes reports a latency and a rate
 	// that nobody experiences.
 	m := NewMetrics()
-	m.Observe("recaptcha-v2", 5*time.Second, true, ReasonOK)
-	m.Observe("recaptcha-v2", 90*time.Second, false, ReasonTimeout)
+	m.Observe("alice", "recaptcha-v2", 5*time.Second, true, ReasonOK)
+	m.Observe("alice", "recaptcha-v2", 90*time.Second, false, ReasonTimeout)
 
 	var out strings.Builder
 	m.Write(&out, nil)
@@ -121,7 +121,7 @@ func TestObservingFromEveryHandlerAtOnceIsSafe(t *testing.T) {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			for j := range 50 {
-				m.Observe(kinds[j%len(kinds)], time.Duration(j)*time.Second, j%2 == 0, ReasonOK)
+				m.Observe("alice", kinds[j%len(kinds)], time.Duration(j)*time.Second, j%2 == 0, ReasonOK)
 			}
 		}()
 		_ = i

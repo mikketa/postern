@@ -100,8 +100,8 @@ func TestAFleetTurningCallersAwayIsCounted(t *testing.T) {
 	// It used to return before anything recorded it, so the load that got a
 	// 503 was invisible — exactly the load an operator needs to see.
 	m := NewMetrics()
-	m.Observe("turnstile", 0, false, ReasonBusy)
-	m.Observe("turnstile", 3*time.Second, true, ReasonOK)
+	m.Observe("alice", "turnstile", 0, false, ReasonBusy)
+	m.Observe("alice", "turnstile", 3*time.Second, true, ReasonOK)
 
 	var out strings.Builder
 	m.Write(&out, nil)

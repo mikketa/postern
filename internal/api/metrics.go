@@ -22,6 +22,14 @@ type Metrics struct {
 	// so a plain map under a mutex beats anything cleverer.
 	solves map[outcome]int64
 
+	// perClient counts outcomes per caller, and deliberately does not carry
+	// the vendor or the reason. Those are already on solves, and crossing all
+	// four would make the number of series the product of every label instead
+	// of the sum — with clients as the one dimension an operator adds to over
+	// time. Two series per client is what billing and a noisy-neighbour
+	// question both need, and neither needs more.
+	perClient map[clientOutcome]int64
+
 	// buckets is the cumulative count per upper bound, by index into
 	// durationBounds. Cumulative is the format's own convention: each bucket
 	// holds everything at or below its bound.
@@ -39,6 +47,13 @@ type outcome struct {
 	reason Reason
 }
 
+// clientOutcome is one caller's counter. Bounded by the client file, which an
+// operator writes, rather than by traffic.
+type clientOutcome struct {
+	client string
+	result string // "token" or "failed"
+}
+
 // durationBounds are the upper edges of the latency histogram, in seconds.
 // Chosen against measured solves: a Turnstile lands near 3s, a picture
 // challenge near 12s, a site behind a managed challenge near 25s, and anything
@@ -48,8 +63,9 @@ var durationBounds = []float64{1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120}
 // NewMetrics builds an empty set.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		solves:  make(map[outcome]int64),
-		buckets: make([]int64, len(durationBounds)),
+		solves:    make(map[outcome]int64),
+		perClient: make(map[clientOutcome]int64),
+		buckets:   make([]int64, len(durationBounds)),
 	}
 }
 
@@ -59,9 +75,12 @@ func NewMetrics() *Metrics {
 // zero duration: it is a real outcome an operator needs on the graph, but it
 // did not spend any time solving and putting it in the latency histogram would
 // drag every quantile toward nothing.
-func (m *Metrics) Observe(kind string, took time.Duration, solved bool, reason Reason) {
+func (m *Metrics) Observe(client, kind string, took time.Duration, solved bool, reason Reason) {
 	if kind == "" {
 		kind = "turnstile"
+	}
+	if client == "" {
+		client = clientName(nil)
 	}
 	result := "failed"
 	if solved {
@@ -72,6 +91,7 @@ func (m *Metrics) Observe(kind string, took time.Duration, solved bool, reason R
 	defer m.mu.Unlock()
 
 	m.solves[outcome{kind: kind, result: result, reason: reason}]++
+	m.perClient[clientOutcome{client: client, result: result}]++
 
 	if reason == ReasonBusy {
 		return
@@ -98,16 +118,29 @@ func (m *Metrics) Write(w io.Writer, gauges map[string]int) {
 			"postern_solves_total{kind=%q,outcome=%q,reason=%q} %d",
 			o.kind, o.result, o.reason, n))
 	}
+	clientRows := make([]string, 0, len(m.perClient))
+	for o, n := range m.perClient {
+		clientRows = append(clientRows, fmt.Sprintf(
+			"postern_client_solves_total{client=%q,outcome=%q} %d",
+			o.client, o.result, n))
+	}
 	buckets := append([]int64(nil), m.buckets...)
 	sum, count := m.sum, m.count
 	m.mu.Unlock()
 
 	// Sorted so a diff between two scrapes is readable by a person.
 	sort.Strings(rows)
+	sort.Strings(clientRows)
 
 	fmt.Fprintln(w, "# HELP postern_solves_total Solves finished, by vendor, outcome and cause.")
 	fmt.Fprintln(w, "# TYPE postern_solves_total counter")
 	for _, r := range rows {
+		fmt.Fprintln(w, r)
+	}
+
+	fmt.Fprintln(w, "# HELP postern_client_solves_total Solves finished, by caller and outcome.")
+	fmt.Fprintln(w, "# TYPE postern_client_solves_total counter")
+	for _, r := range clientRows {
 		fmt.Fprintln(w, r)
 	}
 

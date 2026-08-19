@@ -254,7 +254,7 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 	if !client.allow() {
 		wait := client.retryAfter()
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())))
-		s.metrics.Observe(req.Kind, 0, false, ReasonQuota)
+		s.metrics.Observe(clientName(client), req.Kind, 0, false, ReasonQuota)
 		writeFailure(w, ReasonQuota, "quota exceeded, retry in "+wait.String())
 		return
 	}
@@ -305,7 +305,7 @@ func (s *Server) solveOnce(ctx context.Context, req solveRequest, id string) (*s
 		// recorded it — the load that got a 503 was invisible.
 		s.log.Info("no identity free", "ready", s.fleet.Ready(), "of", s.fleet.Size(),
 			"request_id", id)
-		s.metrics.Observe(req.Kind, 0, false, ReasonBusy)
+		s.metrics.Observe(clientName(clientFrom(ctx)), req.Kind, 0, false, ReasonBusy)
 		return nil, ReasonBusy, err
 	}
 
@@ -319,7 +319,7 @@ func (s *Server) solveOnce(ctx context.Context, req solveRequest, id string) (*s
 		// that no user experiences. The reason rides along so that a rise in
 		// failures says which kind, which is the difference between "the
 		// address is being refused" and "nobody configured a vision solver".
-		s.metrics.Observe(req.Kind, time.Since(started), solved, reason)
+		s.metrics.Observe(clientName(clientFrom(ctx)), req.Kind, time.Since(started), solved, reason)
 	}()
 
 	result, err := solver.Solve(ctx, chrome, solver.Request{
