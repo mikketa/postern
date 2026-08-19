@@ -165,8 +165,14 @@ func TestAQuotaRefusesPastItsRateAndSaysWhenToComeBack(t *testing.T) {
 	// Two per minute: two go through on the burst, the third does not.
 	c := &Client{Name: "alice", quota: newBucket(2)}
 
-	if !c.allow() || !c.allow() {
-		t.Fatal("the burst did not cover a minute's worth of solves")
+	// Written out rather than folded into one condition: each call spends a
+	// token, so short-circuiting would silently make this test spend fewer
+	// than it reads as spending.
+	for i := range 2 {
+		if !c.allow() {
+			t.Fatalf("the burst did not cover a minute's worth of solves: "+
+				"refused at %d of 2", i+1)
+		}
 	}
 	if c.allow() {
 		t.Error("a third solve went through on a two-per-minute quota")
