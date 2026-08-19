@@ -135,8 +135,14 @@ curl -s localhost:8099/solve -d '{
 | `cdata` | string | no | Turnstile only |
 | `timeout_ms` | int | no | Lowers the server's timeout for this request. It cannot raise it |
 
-`GET /health` returns `{"status": "ok"}`, `GET /fleet` reports what each identity has done,
-and `GET /metrics` is below.
+`GET /fleet` reports what each identity has done, and `GET /metrics` is below.
+
+`GET /health` answers `200` with the running version and how much of the fleet is free — and
+**`503` when the server cannot work at all**, with the reason. The distinction is the point:
+a fleet whose identities are all resting is busy and healthy, and restarting it would throw
+away every profile's history. A server whose Chrome has died is neither, and wants restarting.
+It turns red within one failed request rather than the instant the process dies, because that
+is when the connection is discovered closed.
 
 ### When it fails
 
@@ -222,6 +228,11 @@ protocol says to, not with a header no existing client would send.
 | `method=turnstile` | Turnstile |
 | anything else | `ERROR_NO_SUCH_METHOD`, immediately rather than after a timeout |
 
+The queue is bounded at ten waiting jobs per concurrent slot, and a submission past that gets
+`ERROR_NO_SLOT_AVAILABLE` — the protocol's own word for it, which clients already back off on.
+Accepting work there is no prospect of reaching is a worse failure deferred: each waiting job
+holds a goroutine and a timer, and every one of them times out having never seen a browser.
+
 Both `googlekey` and `sitekey` are accepted for either vendor, and `pageurl` or `url`,
 because clients in the wild send all four. Failures come back as `ERROR_CAPTCHA_UNSOLVABLE`,
 `ERROR_NO_SLOT_AVAILABLE` or `ERROR_KEY_DOES_NOT_EXIST` — and with a `200`, because that is
@@ -246,6 +257,7 @@ postern_solves_total{kind="recaptcha-v2",outcome="failed",reason="timeout"} 2
 postern_solve_duration_seconds_bucket{le="15"} 38
 postern_fleet_identities_ready 7
 postern_solve_slots_in_use 2
+postern_build_info{version="v0.3.1"} 1
 ```
 
 Failures are counted and timed alongside successes — a solver measured only on the runs
@@ -262,7 +274,9 @@ traces requests can join the two sides. A panic returns `500` with a body instea
 dropped connection, which is otherwise indistinguishable from the network failing.
 
 On `SIGTERM` the listener closes at once and in-flight solves are given **`-timeout` plus
-fifteen seconds** to finish, because a solve may legally still be running for all of it.
+fifteen seconds** to finish, because a solve may legally still be running for all of it. That
+includes the ones submitted through `/in.php`, which outlive the request that submitted them
+and which `http.Server` therefore knows nothing about.
 Size your orchestrator's grace period against that number — Kubernetes defaults to 30
 seconds, which is shorter than the default drain. A second signal stops immediately. No client library: the exposition format
 is small and stable, and the official one would roughly triple a dependency tree that is
@@ -468,6 +482,7 @@ the target.
 | `-tls-cert` | none | Certificate file: serve HTTPS rather than HTTP |
 | `-tls-key` | none | Private key file, with `-tls-cert` |
 | `-behind-tls-proxy` | `false` | Something in front already terminates TLS, so cleartext off this machine is intended |
+| `-log` | `text` | Log format: `text` for a person, `json` for anything that collects them |
 
 `serve` also reads **`POSTERN_TOKEN`** from the environment — see
 [Authentication](#authentication). Without it the server will only bind to loopback.
