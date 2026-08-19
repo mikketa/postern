@@ -184,16 +184,23 @@ jobs:
       # cleartext without being told a terminator is in front.
       - name: it refuses to be reachable unsafely
         run: |
-          if docker run --rm postern:ci 2>&1 | tee /tmp/no-token; then
+          # Redirected and not piped to tee: a pipeline exits with the status of
+          # its last command, so `docker run | tee` always looked like a success
+          # and neither of these checks could ever have failed.
+          if docker run --rm postern:ci >/tmp/no-token 2>&1; then
+            cat /tmp/no-token
             echo "started with no POSTERN_TOKEN on 0.0.0.0 — the guard is not working"
             exit 1
           fi
+          cat /tmp/no-token
           grep -q "POSTERN_TOKEN" /tmp/no-token
 
-          if docker run --rm -e POSTERN_TOKEN=ci-token postern:ci 2>&1 | tee /tmp/cleartext; then
+          if docker run --rm -e POSTERN_TOKEN=ci-token postern:ci >/tmp/cleartext 2>&1; then
+            cat /tmp/cleartext
             echo "started with a token on a plain socket — the secret would go out in the open"
             exit 1
           fi
+          cat /tmp/cleartext
           grep -q "cleartext" /tmp/cleartext
 
   # Release binaries, built only for a tag. Cross-compiled from one runner:
