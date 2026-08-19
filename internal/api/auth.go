@@ -115,8 +115,25 @@ func authenticated(token string, next http.Handler) http.Handler {
 	})
 }
 
-// openPath reports whether a route is reachable without a token. Only the
-// health check is: a load balancer probing it usually cannot carry a secret,
-// and it says nothing an unauthenticated caller could use. /fleet is not on
-// the list — it names identities and whether each is proxied.
-func openPath(p string) bool { return strings.HasPrefix(p, "/health") }
+// bearerExempt reports whether a route is outside the bearer check.
+//
+// Two kinds are, for different reasons, and neither is "unauthenticated":
+//
+//   - /health, because a load balancer probing it usually cannot carry a
+//     secret, and the answer says nothing a caller could use. /fleet is not on
+//     the list: it names identities and whether each is proxied.
+//   - the 2Captcha-compatible endpoints, which carry their own credential in a
+//     "key" parameter because that is what the protocol specifies. They check
+//     it themselves against the same secret — see Server.keyOK. Requiring a
+//     bearer as well would mean no existing client could reach them, which is
+//     the entire point of speaking that protocol.
+func bearerExempt(p string) bool {
+	return strings.HasPrefix(p, "/health") || p == "/in.php" || p == "/res.php"
+}
+
+// subtleEqual compares two secrets in constant time, padded so that a length
+// mismatch does not return early and leak the length one request at a time.
+func subtleEqual(got, want string) bool {
+	return len(got) == len(want) &&
+		subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
