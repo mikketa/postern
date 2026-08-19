@@ -185,3 +185,26 @@ func TestEveryErrorResponseCarriesACode(t *testing.T) {
 		})
 	}
 }
+
+// TestADeadBrowserIsNotACallerHangingUp is a bug this made once, and the kind
+// that hides rather than breaks. Chrome dying under a solve surfaces as
+// context.Canceled, exactly like a caller closing its connection — and
+// "client_gone" is the one reason nobody investigates. Measured on a live
+// server with its Chrome killed: the failure was counted as a client hanging
+// up and the graph said everything was fine.
+func TestADeadBrowserIsNotACallerHangingUp(t *testing.T) {
+	s := serverFor(&stubFleet{ready: 1, borrowErr: context.Canceled})
+
+	// The caller is very much still here.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/solve",
+		strings.NewReader(`{"url":"https://e.com","sitekey":"k"}`))
+	s.Handler().ServeHTTP(rec, req)
+
+	var out strings.Builder
+	s.metrics.Write(&out, nil)
+	if strings.Contains(out.String(), `reason="client_gone"`) {
+		t.Error("a failure with the caller still connected was counted as the " +
+			"caller leaving — a dead browser would be invisible on the graph")
+	}
+}
