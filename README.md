@@ -22,6 +22,7 @@
   <a href="#what-works">What works</a> ·
   <a href="#install">Install</a> ·
   <a href="#use-it">Use it</a> ·
+  <a href="#drop-in-for-an-existing-client">Drop-in</a> ·
   <a href="#picture-challenges">Picture challenges</a> ·
   <a href="#running-it-at-volume">At volume</a> ·
   <a href="#how-it-works">How it works</a> ·
@@ -192,6 +193,45 @@ postern serve -addr 0.0.0.0:8099 -behind-tls-proxy
 The second flag is named for what it claims rather than for what it turns off. An operator
 who has a terminator should recognise their own deployment in it; one who does not should
 not be tempted by it.
+
+### Drop-in for an existing client
+
+Postern also speaks the 2Captcha legacy interface, so a client already written against one
+of the paid services points here by changing its base URL and nothing else.
+
+```sh
+# submit
+curl -s http://localhost:8099/in.php \
+  -d "key=$POSTERN_TOKEN&method=userrecaptcha&googlekey=6Lc...&pageurl=https://example.com"
+# OK|120047878299709
+
+# collect, five seconds later
+curl -s "http://localhost:8099/res.php?key=$POSTERN_TOKEN&action=get&id=120047878299709"
+# OK|03AGdBq26...
+```
+
+`json=1` switches both to `{"status":1,"request":"..."}`. The `key` parameter is the same
+`POSTERN_TOKEN` as the bearer elsewhere — these two routes authenticate the way the
+protocol says to, not with a header no existing client would send.
+
+| Their method | What postern solves |
+| :--- | :--- |
+| `method=userrecaptcha` | reCAPTCHA v2 |
+| `method=userrecaptcha&invisible=1` | reCAPTCHA v2 invisible |
+| `method=userrecaptcha&version=v3&action=…` | reCAPTCHA v3 |
+| `method=turnstile` | Turnstile |
+| anything else | `ERROR_NO_SUCH_METHOD`, immediately rather than after a timeout |
+
+Both `googlekey` and `sitekey` are accepted for either vendor, and `pageurl` or `url`,
+because clients in the wild send all four. Failures come back as `ERROR_CAPTCHA_UNSOLVABLE`,
+`ERROR_NO_SLOT_AVAILABLE` or `ERROR_KEY_DOES_NOT_EXIST` — and with a `200`, because that is
+what this protocol does and what its clients are written to read.
+
+> [!NOTE]
+> It is a protocol, not a second implementation: both front ends call the same solve path,
+> queue in the same slots and land in the same metrics. `/solve` is the better shape — one
+> request, one answer, a real status code, a `code` you can branch on — and worth moving to.
+> This one is here so nobody has to before they have tried it.
 
 ### Operating it
 
