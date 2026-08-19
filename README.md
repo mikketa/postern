@@ -576,6 +576,11 @@ root. Two things a server takes back:
   it away.
 - **Datacenter IPs carry their own reputation.** Expect challenges more often, and harder,
   than from a residential connection. `-proxy` exists for this.
+- **A hard kill leaves Chrome behind.** Measured: `SIGKILL` on postern left two browser
+  processes running. A normal shutdown does not — that path closes the browser politely,
+  which is also what writes the profile. Worth a `pkill` in whatever supervises it, or run
+  the container, where the PID namespace takes them with it. The tidy fix is `PR_SET_PDEATHSIG`
+  on the browser process, which chromedp does not expose.
 
 <br>
 
