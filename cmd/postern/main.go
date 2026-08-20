@@ -1,7 +1,7 @@
 // Command postern solves Turnstile and reCAPTCHA challenges with a real browser.
 //
 //	postern serve                       # local HTTP API
-//	postern solve -url ... -sitekey ...  # one shot, token on stdout
+//	postern solve -url ...                # one shot, token on stdout
 package main
 
 import (
@@ -29,7 +29,7 @@ const usage = `postern - captcha solver driving a real Chrome
 
 usage:
   postern serve [flags]
-  postern solve -url <page> -sitekey <key> [-kind <kind>] [flags]
+  postern solve -url <page> [-sitekey <key>] [-kind <kind>] [flags]
   postern warm -pages <file> [flags]
   postern version
 
@@ -434,9 +434,13 @@ func runSolve(args []string) error {
 	fs := flag.NewFlagSet("solve", flag.ExitOnError)
 	opts, screen, mode := browserFlags(fs)
 	url := fs.String("url", "", "page the widget belongs to (required)")
-	sitekey := fs.String("sitekey", "", "sitekey, as found in the target page (required)")
-	kind := fs.String("kind", string(solver.Turnstile),
-		"challenge kind: "+strings.Join(solver.Kinds(), ", "))
+	sitekey := fs.String("sitekey", "", "sitekey. Read off the page when not given")
+	// Empty rather than "turnstile", so that a kind read off the page is not
+	// overridden by a default nobody chose. Left unset and undetectable, the
+	// solver falls back to turnstile itself.
+	kind := fs.String("kind", "",
+		"challenge kind: "+strings.Join(solver.Kinds(), ", ")+
+			". Read off the page when not given")
 	action := fs.String("action", "", "action parameter, if the site sets one")
 	cdata := fs.String("cdata", "", "Turnstile cData parameter, if the site sets one")
 	imageSolver := fs.String("image-solver", "",
@@ -448,8 +452,8 @@ func runSolve(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *url == "" || *sitekey == "" {
-		return errors.New("-url and -sitekey are required")
+	if *url == "" {
+		return errors.New("-url is required")
 	}
 	if err := applyScreen(opts, *screen); err != nil {
 		return err

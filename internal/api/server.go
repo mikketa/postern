@@ -269,8 +269,10 @@ func (s *Server) handleSolve(w http.ResponseWriter, r *http.Request) {
 		writeFailure(w, ReasonInvalid, "invalid json body: "+err.Error())
 		return
 	}
-	if req.URL == "" || req.SiteKey == "" {
-		writeFailure(w, ReasonInvalid, "url and sitekey are required")
+	// sitekey is optional: left out, the solver reads it off the page. url is
+	// not — there is nothing to read without it.
+	if req.URL == "" {
+		writeFailure(w, ReasonInvalid, "url is required")
 		return
 	}
 

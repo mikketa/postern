@@ -173,21 +173,16 @@ type state struct {
 // Solve opens a tab on req.URL, renders the widget itself, and waits for the
 // token. Rendering our own widget rather than hunting the page's one keeps this
 // independent of how the target site lays out its form.
+//
+// req.SiteKey may be empty, in which case the key is read off the page once it
+// is open — see detect.go. The key is in the markup of the page the caller
+// already named, so requiring it as well made every integration go and find it
+// first, and go stale the day the site rotated it.
 func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Duration) (*Result, error) {
-	if req.URL == "" || req.SiteKey == "" {
-		return nil, fmt.Errorf("solver: %w: url and sitekey are required", ErrInvalidRequest)
-	}
-
-	p, err := lookup(req.Kind)
-	if err != nil {
-		return nil, err
+	if req.URL == "" {
+		return nil, fmt.Errorf("solver: %w: url is required", ErrInvalidRequest)
 	}
 	log := req.logger()
-
-	bootstrap, err := p.bootstrap(req)
-	if err != nil {
-		return nil, err
-	}
 
 	tabCtx, closeTab, err := b.NewTab()
 	if err != nil {
@@ -199,13 +194,42 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	defer cancel()
 
 	start := time.Now()
-	if err := open(tabCtx, req.URL, bootstrap, log); err != nil {
+
+	// Navigating and crossing come first now, because the page has to be the
+	// real one before it can be asked what widget it carries.
+	if err := open(tabCtx, req.URL, log); err != nil {
 		// A crossing that failed says so itself, and says it about a widget
 		// that was never reached. Calling that a bootstrap failure sends the
 		// reader to the wrong half of the run.
 		if errors.Is(err, ErrCrossing) {
 			return nil, err
 		}
+		return nil, fmt.Errorf("solver: open page: %w", err)
+	}
+
+	if req.SiteKey == "" {
+		f, err := detect(tabCtx, log)
+		if err != nil {
+			return nil, err
+		}
+		req.SiteKey = f.Key
+		// Only taken when the caller did not say. Someone naming a kind is
+		// telling us something the markup cannot — an invisible reCAPTCHA and
+		// a checkbox one look the same in the places a key is written.
+		if req.Kind == "" {
+			req.Kind = f.Kind
+		}
+	}
+
+	p, err := lookup(req.Kind)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap, err := p.bootstrap(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := chromedp.Run(tabCtx, chromedp.Evaluate(bootstrap, nil)); err != nil {
 		return nil, fmt.Errorf("solver: bootstrap widget: %w", err)
 	}
 
@@ -378,7 +402,11 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 // underneath a request — it happens on a cold profile, it has nothing to do
 // with the page, and the documented remedy is to ask again. It cost a measured
 // run for no reason at all.
-func open(ctx context.Context, url, bootstrap string, log *slog.Logger) error {
+// open navigates to url and crosses whatever stands in front of it, leaving
+// the tab on the real page. Installing the widget is the caller's next step,
+// and is deliberately not done here: between the two is the only moment the
+// page can be read as the site wrote it.
+func open(ctx context.Context, url string, log *slog.Logger) error {
 	var err error
 	for attempt := range navigateAttempts {
 		if attempt > 0 {
@@ -398,10 +426,7 @@ func open(ctx context.Context, url, bootstrap string, log *slog.Logger) error {
 		// it has to be crossed before there is a page to put a widget on —
 		// installing the bootstrap on the interstitial would render our widget
 		// on Cloudflare's holding page and wait for a token from it.
-		if err := cross(ctx, log); err != nil {
-			return err
-		}
-		return chromedp.Run(ctx, chromedp.Evaluate(bootstrap, nil))
+		return cross(ctx, log)
 	}
 	return err
 }
