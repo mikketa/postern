@@ -8,10 +8,10 @@ import (
 
 // The learned part.
 //
-// A logistic model over the comparison vector: given a pictogram and a
-// candidate, how likely is it that this candidate is the thing being asked
-// for. Small enough to train in a few seconds and to ship as twelve numbers,
-// which matters — a model nobody can read or retrain is a model that rots.
+// A linear model over the comparison vector, fitted to rank the candidates of
+// one pictogram against each other rather than to judge each pair on its own.
+// Small enough to train in a few seconds and to ship as twelve numbers, which
+// matters — a model nobody can read or retrain is a model that rots.
 //
 // It is trained on challenges whose answers were established by looking at
 // them, and it replaces weights that were picked by hand. Hand-picking is how
@@ -85,42 +85,59 @@ type Sample struct {
 	Positive bool
 }
 
-// Train fits a model by gradient descent on the log-loss.
+// Train fits a model by gradient descent, one pictogram at a time.
 //
-// Positives are outnumbered — one candidate in a picture answers a given
-// pictogram and the rest do not — so they are weighted up to match. Without
-// that the shortest path to a low loss is to answer "no" to everything, which
-// scores well and pairs nothing.
-func Train(data []Sample, passes int, rate, decay float64) (Model, error) {
-	if len(data) == 0 {
-		return Model{}, fmt.Errorf("puzzle: nothing to train on")
-	}
-	pos := 0
-	for _, s := range data {
-		if s.Positive {
-			pos++
+// The loss is a softmax over the candidates of a single pictogram rather than
+// a yes/no verdict on each candidate on its own. That is the shape of the
+// question: a picture holds several candidates and exactly one of them is the
+// icon being asked for, so what has to come out right is the ordering within
+// that set, not a calibrated probability for each pair. Scoring pairs
+// independently optimises something else and then hopes the ordering follows.
+//
+// It also disposes of the class imbalance. Every pictogram contributes one
+// positive and a handful of negatives; normalising inside the group makes that
+// the definition of the problem instead of a skew to be corrected with a
+// weight picked by hand.
+//
+// One consequence is worth knowing: a measurement that is the same for every
+// candidate of a pictogram cannot move the ordering, so its gradient cancels
+// and its weight stays at zero. The bias is exactly such a measurement.
+func Train(groups [][]Sample, passes int, rate, decay float64) (Model, error) {
+	var usable [][]Sample
+	var all []Sample
+	for _, g := range groups {
+		pos := 0
+		for _, s := range g {
+			if s.Positive {
+				pos++
+			}
 		}
+		// A pictogram with no answer among the candidates, or with only one
+		// candidate to choose from, has nothing to say about ranking.
+		if pos != 1 || len(g) < 2 {
+			continue
+		}
+		usable = append(usable, g)
+		all = append(all, g...)
 	}
-	if pos == 0 || pos == len(data) {
-		return Model{}, fmt.Errorf("puzzle: training data is all one class (%d of %d positive)",
-			pos, len(data))
+	if len(usable) == 0 {
+		return Model{}, fmt.Errorf("puzzle: no pictogram with one answer among two or more candidates")
 	}
-	posWeight := float64(len(data)-pos) / float64(pos)
 
 	var m Model
 	// Fit the scaling first, on the training data only.
 	for i := range FeatureCount {
 		var sum float64
-		for _, s := range data {
+		for _, s := range all {
 			sum += s.Features[i]
 		}
-		mean := sum / float64(len(data))
+		mean := sum / float64(len(all))
 		var varsum float64
-		for _, s := range data {
+		for _, s := range all {
 			d := s.Features[i] - mean
 			varsum += d * d
 		}
-		sd := math.Sqrt(varsum / float64(len(data)))
+		sd := math.Sqrt(varsum / float64(len(all)))
 		if sd < 1e-9 {
 			sd = 1
 		}
@@ -128,7 +145,8 @@ func Train(data []Sample, passes int, rate, decay float64) (Model, error) {
 	}
 	// The bias must not be centred away to nothing.
 	m.Mean[FeatureCount-1], m.Scale[FeatureCount-1] = 0, 1
-	order := make([]int, len(data))
+
+	order := make([]int, len(usable))
 	for i := range order {
 		order[i] = i
 	}
@@ -136,21 +154,48 @@ func Train(data []Sample, passes int, rate, decay float64) (Model, error) {
 	// is trained cannot be compared against the one it replaces.
 	rng := rand.New(rand.NewPCG(1, 2))
 
+	scaled := make([][][FeatureCount]float64, len(usable))
+	for i, g := range usable {
+		scaled[i] = make([][FeatureCount]float64, len(g))
+		for j, s := range g {
+			scaled[i][j] = m.standardise(s.Features)
+		}
+	}
+
+	p := make([]float64, 0, 16)
 	for pass := range passes {
 		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 		lr := rate / (1 + float64(pass)*0.02)
 		for _, idx := range order {
-			s := data[idx]
-			sf := m.standardise(s.Features)
-			p := sigmoid(m.dotStandardised(sf))
-			y, w := 0.0, 1.0
-			if s.Positive {
-				y, w = 1, posWeight
+			g, sf := usable[idx], scaled[idx]
+			p = p[:0]
+			top := math.Inf(-1)
+			for j := range g {
+				z := m.dotStandardised(sf[j])
+				p = append(p, z)
+				if z > top {
+					top = z
+				}
 			}
-			err := (p - y) * w
+			// Shifted before exponentiating: the scores are unbounded and a
+			// confident model overflows otherwise.
+			sum := 0.0
+			for j := range p {
+				p[j] = math.Exp(p[j] - top)
+				sum += p[j]
+			}
+			var grad [FeatureCount]float64
+			for j := range p {
+				e := p[j] / sum
+				if g[j].Positive {
+					e--
+				}
+				for i := range grad {
+					grad[i] += e * sf[j][i]
+				}
+			}
 			for i := range m.Weights {
-				g := err*sf[i] + decay*m.Weights[i]
-				m.Weights[i] -= lr * g
+				m.Weights[i] -= lr * (grad[i] + decay*m.Weights[i])
 			}
 		}
 	}

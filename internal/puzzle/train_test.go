@@ -8,6 +8,7 @@ import (
 	"image/draw"
 	"image/png"
 	_ "image/png"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -33,12 +34,18 @@ import (
 //	    meaning pictogram 1 is candidate 2, pictogram 2 is candidate 0, and so
 //	    on. -1 where segmentation missed the icon entirely.
 //
-//	BENCH_DIR=<dir> LABELS=<file> EMIT=internal/puzzle/weights.go go test \
+//	BENCH_DIR=<dir> LABELS=<file> EMIT=weights.go go test \
 //	    -count=1 ./internal/puzzle -run TestTrainIconModel -v
 //	    fits the model, reports cross-validated accuracy against a baseline,
-//	    and writes the weights. -count=1 matters: the labels file is not a
-//	    declared dependency, so a cached result will silently ignore edits to
-//	    it.
+//	    and writes the weights. EMIT is relative to this directory, because a
+//	    test runs in the directory of the package it tests. -count=1 matters:
+//	    the labels file is not a declared dependency, so a cached result will
+//	    silently ignore edits to it.
+//
+// Read the run's last line. weights.go declares its arrays as [FeatureCount],
+// so a file left over from a shorter feature vector still compiles, with the
+// features added since silently weighted zero — a stale model that looks like
+// a fitted one.
 
 var palette = []color.RGBA{
 	{255, 0, 0, 255}, {0, 220, 0, 255}, {60, 120, 255, 255}, {255, 230, 0, 255},
@@ -172,6 +179,7 @@ func TestTrainIconModel(t *testing.T) {
 	}
 	folds := 4
 	var accs []float64
+	var wholes [][2]int
 	for fold := range folds {
 		var train, test [][]Sample
 		for i, g := range groups {
@@ -184,17 +192,54 @@ func TestTrainIconModel(t *testing.T) {
 		if len(test) == 0 || len(train) == 0 {
 			continue
 		}
-		var flat []Sample
-		for _, g := range train {
-			flat = append(flat, g...)
-		}
-		m, err := Train(flat, 400, 0.05, 1e-4)
+		m, err := Train(train, 400, 0.05, 0.3)
 		if err != nil {
 			t.Fatal(err)
 		}
 		a := Accuracy(m, test)
 		accs = append(accs, a)
-		t.Logf("fold %d: %d groupes de test, precision %.2f", fold, len(test), a)
+
+		// The question the solver actually asks: not whether each pictogram's
+		// candidate ranks first, but whether the whole arrangement is right.
+		// A challenge is passed or failed as a whole, so three pictograms at
+		// two thirds each is not two thirds of a challenge.
+		whole, wholeOK := 0, 0
+		for _, n := range names {
+			c, ok := challenges[n]
+			if !ok || seen[n]%folds != fold {
+				continue
+			}
+			answer, ok := labels[n]
+			if !ok || len(answer) != len(c.wanted) {
+				continue
+			}
+			full := true
+			for _, v := range answer {
+				if v < 0 || v >= len(c.found) {
+					full = false
+				}
+			}
+			if !full {
+				continue
+			}
+			whole++
+			pair, err := pairWith(m, c.wanted, c.found)
+			if err != nil {
+				continue
+			}
+			right := true
+			for i, j := range pair.Order {
+				if j != answer[i] {
+					right = false
+				}
+			}
+			if right {
+				wholeOK++
+			}
+		}
+		wholes = append(wholes, [2]int{wholeOK, whole})
+		t.Logf("fold %d: %d groupes de test, precision %.2f — defis entiers %d/%d",
+			fold, len(test), a, wholeOK, whole)
 	}
 	var mean float64
 	for _, a := range accs {
@@ -204,6 +249,15 @@ func TestTrainIconModel(t *testing.T) {
 		mean /= float64(len(accs))
 	}
 	t.Logf("PRECISION VALIDEE: %.3f", mean)
+
+	var ok, tot int
+	for _, w := range wholes {
+		ok += w[0]
+		tot += w[1]
+	}
+	if tot > 0 {
+		t.Logf("DEFIS ENTIERS VALIDES: %d/%d = %.3f", ok, tot, float64(ok)/float64(tot))
+	}
 
 	// A baseline to beat: pick whichever candidate overlaps most.
 	base := 0
@@ -220,11 +274,33 @@ func TestTrainIconModel(t *testing.T) {
 	}
 	t.Logf("BASELINE (recouvrement seul): %.3f", float64(base)/float64(len(groups)))
 
-	var flat []Sample
-	for _, g := range groups {
-		flat = append(flat, g...)
+	// What each measurement is worth on its own, ranking by it alone. A model
+	// that cannot beat its best single column is not being held back by its
+	// objective or its sample size: the columns simply do not carry more than
+	// one of them already says.
+	for f := range FeatureCount {
+		for _, sign := range []float64{1, -1} {
+			hit := 0
+			for _, g := range groups {
+				best, bestS := -1, math.Inf(-1)
+				for i, s := range g {
+					if v := sign * s.Features[f]; v > bestS {
+						best, bestS = i, v
+					}
+				}
+				if best >= 0 && g[best].Positive {
+					hit++
+				}
+			}
+			dir := "+"
+			if sign < 0 {
+				dir = "-"
+			}
+			t.Logf("  seule %s%-16s %.3f", dir, FeatureNames[f], float64(hit)/float64(len(groups)))
+		}
 	}
-	final, err := Train(flat, 600, 0.05, 1e-4)
+
+	final, err := Train(groups, 600, 0.05, 0.3)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +411,16 @@ func emit(t *testing.T, path string, m Model) {
 	for _, v := range m.Scale {
 		b.WriteString(fmt.Sprintf("\t\t%+.6f,\n", v))
 	}
-	b.WriteString("\t},\n}\n")
+	b.WriteString("\t},\n}\n\n")
+	// Stamped with what the weights were fitted against, so that a file left
+	// over from a different feature vector is caught by a test instead of
+	// compiling into a model whose columns no longer line up.
+	b.WriteString("// trainedFeatures names what each weight was fitted against.\n")
+	b.WriteString("var trainedFeatures = [FeatureCount]string{\n")
+	for _, n := range FeatureNames {
+		b.WriteString(fmt.Sprintf("\t%q,\n", n))
+	}
+	b.WriteString("}\n")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
