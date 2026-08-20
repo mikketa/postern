@@ -307,6 +307,14 @@ type Pairing struct {
 // answer is the best whole arrangement rather than a series of independent
 // best guesses that can claim the same icon twice.
 func PairIcons(wanted, found []Shape) (Pairing, error) {
+	return pairWith(trained, wanted, found)
+}
+
+// pairWith is PairIcons against a given model, so that a model held out of
+// training can be measured on the question that is actually asked live —
+// whether the whole arrangement is right — and not only on whether each
+// pictogram's candidate ranks first.
+func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 	if len(wanted) == 0 {
 		return Pairing{}, fmt.Errorf("puzzle: the prompt asks for nothing")
 	}
@@ -327,7 +335,7 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 		cost[i] = make([]float64, len(found))
 		for j := range found {
 			// Negated: the search below minimises.
-			cost[i][j] = -trained.dot(Features(wanted[i], found[j], found))
+			cost[i][j] = -m.dot(Features(wanted[i], found[j], found))
 		}
 	}
 
@@ -346,13 +354,15 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 			// solved — while the decorations they hide among are sized
 			// independently. An arrangement that mixes a large shape with a
 			// small one is usually picking up scenery.
+			//
+			// This is the one judgement left outside the model, because it is
+			// the one the model cannot make: it scores a whole arrangement,
+			// and every measurement handed to the model concerns a single
+			// pictogram against a single candidate. Whether a candidate looks
+			// drawn rather than solid used to be added here too, with a weight
+			// picked by hand; it is a property of one candidate, so it belongs
+			// in the vector and it is in it.
 			sc += spread(found, cur)
-			// Prefer candidates that look drawn rather than solid: the
-			// scenery in these pictures is lettering and photographed
-			// objects, and both are solid where an icon is a stroke.
-			for _, j := range cur {
-				sc += 0.45 * (1 - Drawn(found[j]))
-			}
 			switch {
 			case sc < bestScore:
 				bestScore, runnerUp = sc, bestScore
@@ -378,9 +388,19 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 		return Pairing{}, fmt.Errorf("puzzle: no arrangement of icons could be scored")
 	}
 
+	// Confidence within the picture, not in the abstract: the model is fitted
+	// to order the candidates of one pictogram, so only the share of the score
+	// that the chosen candidate takes among them means anything. Its raw score
+	// has no scale of its own.
 	var mean float64
 	for i, j := range best {
-		mean += sigmoid(-cost[i][j])
+		var sum float64
+		for k := range found {
+			sum += math.Exp(-cost[i][k] + cost[i][j])
+		}
+		if sum > 0 {
+			mean += 1 / sum
+		}
 	}
 	mean /= float64(len(best))
 
@@ -524,45 +544,6 @@ func mergeNested(in []Shape) []Shape {
 		}
 	}
 	return out
-}
-
-// Drawn reports how much a shape looks hand-drawn rather than solid, from 0 to
-// 1.
-//
-// The icons in these challenges are drawn in outline — a wandering stroke that
-// leaves most of its own bounding box empty — while the scenery they hide
-// among is solid: letters cut from card, photographed objects. Two cheap
-// measures separate them. A stroke fills little of the box it occupies, and
-// its border is long for the area it encloses, because it wanders.
-func Drawn(s Shape) float64 {
-	if s.W == 0 || s.H == 0 || s.Pixels == 0 {
-		return 0
-	}
-	density := float64(s.Pixels) / float64(s.W*s.H)
-
-	// Border pixels: filled cells with at least one empty neighbour.
-	border := 0
-	for y := range s.H {
-		for x := range s.W {
-			if !s.Mask[y*s.W+x] {
-				continue
-			}
-			for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
-				nx, ny := x+d[0], y+d[1]
-				if nx < 0 || ny < 0 || nx >= s.W || ny >= s.H || !s.Mask[ny*s.W+nx] {
-					border++
-					break
-				}
-			}
-		}
-	}
-	// A solid blob's border grows as the square root of its area; a stroke's
-	// grows with the area itself. The ratio is near 0 for one and near 1 for
-	// the other.
-	wander := float64(border) / float64(s.Pixels)
-
-	sparse := 1 - math.Min(density/0.55, 1)
-	return math.Min(0.5*sparse+0.5*math.Min(wander/0.8, 1), 1)
 }
 
 // mergeTouching joins candidates that are parts of one drawing.
