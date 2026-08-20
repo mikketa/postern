@@ -57,12 +57,21 @@ func recaptchaV2Bootstrap(req Request) (string, error) {
     return true;
   };
 
-  const script = document.createElement('script');
-  script.src = '%s?onload=__posternRender&render=explicit';
-  script.async = true;
-  script.defer = true;
-  script.onerror = () => { window.__postern.error = 'api-script-blocked'; };
-  document.head.appendChild(script);
+  // A page that already uses reCAPTCHA has already loaded this script, and
+  // loading it a second time is not free: api.js is not written to be
+  // initialised twice on one document, and the second copy arrives while the
+  // widgets the first one created are still on the page. Reusing what is there
+  // is both safer and closer to what the page does for itself.
+  if (window.grecaptcha && window.grecaptcha.render) {
+    window.__posternRender();
+  } else {
+    const script = document.createElement('script');
+    script.src = '%s?onload=__posternRender&render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => { window.__postern.error = 'api-script-blocked'; };
+    document.head.appendChild(script);
+  }
 })()`, hostSetup, key, recaptchaAPI), nil
 }
 
@@ -92,12 +101,21 @@ func recaptchaInvisibleBootstrap(req Request) (string, error) {
     window.grecaptcha.execute(id);
   };
 
-  const script = document.createElement('script');
-  script.src = '%s?onload=__posternRender&render=explicit';
-  script.async = true;
-  script.defer = true;
-  script.onerror = () => { window.__postern.error = 'api-script-blocked'; };
-  document.head.appendChild(script);
+  // A page that already uses reCAPTCHA has already loaded this script, and
+  // loading it a second time is not free: api.js is not written to be
+  // initialised twice on one document, and the second copy arrives while the
+  // widgets the first one created are still on the page. Reusing what is there
+  // is both safer and closer to what the page does for itself.
+  if (window.grecaptcha && window.grecaptcha.render) {
+    window.__posternRender();
+  } else {
+    const script = document.createElement('script');
+    script.src = '%s?onload=__posternRender&render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => { window.__postern.error = 'api-script-blocked'; };
+    document.head.appendChild(script);
+  }
 })()`, hostSetup, key, recaptchaAPI), nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/chromedp/chromedp"
@@ -76,7 +77,12 @@ const detectScript = `(() => {
     const m = src.match(/[?&]k=([^&]+)/);
     if (!m) continue;
     const how = /\/enterprise\//.test(src) ? 'recaptcha-enterprise iframe' : 'recaptcha iframe';
-    return hit('recaptcha-v2', decodeURIComponent(m[1]), how);
+    // The anchor frame says which shape it is. A key rendered by the page as
+    // invisible cannot be rendered back as a checkbox: the widget rejects it
+    // through its error callback, immediately and without saying why.
+    const invisible = /[?&]size=invisible/.test(src);
+    return hit(invisible ? 'recaptcha-v2-invisible' : 'recaptcha-v2',
+               decodeURIComponent(m[1]), how + (invisible ? ' (invisible)' : ''));
   }
 
   // Turnstile puts the key in a path segment rather than a query parameter.
@@ -115,7 +121,7 @@ func detect(ctx context.Context, log *slog.Logger) (found, error) {
 				// enterprise.js; loading api.js against an Enterprise key gets
 				// an error-callback with nothing in it that says why, which is
 				// a bad half-hour for whoever has to work out what happened.
-				if f.How == enterpriseFrame {
+				if strings.HasPrefix(f.How, enterpriseFrame) {
 					return found{}, fmt.Errorf("solver: %w: %s is a reCAPTCHA "+
 						"Enterprise key, which postern does not speak yet — it "+
 						"renders through enterprise.js, not api.js",

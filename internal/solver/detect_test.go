@@ -54,6 +54,16 @@ func TestTheWidgetIsReadOffThePage(t *testing.T) {
 			RecaptchaV2, "6Ld_hFEqAAAAAN-SouW8rfW-KW_KwzOg1pJnHWfc",
 		},
 		{
+			// world-novel.fr, and the bug that took four wrong guesses to find:
+			// the key is rendered invisible, and a checkbox widget built from
+			// it is rejected by the vendor immediately, through an error
+			// callback that carries no reason. The anchor frame said so all
+			// along, in a query parameter nobody was reading.
+			"an invisible recaptcha, known only from its frame",
+			`<iframe src="https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Ld_hFEqAAAAAN-SouW8rfW-KW_KwzOg1pJnHWfc&co=x&hl=fr&size=invisible&cb=z"></iframe>`,
+			RecaptchaInvis, "6Ld_hFEqAAAAAN-SouW8rfW-KW_KwzOg1pJnHWfc",
+		},
+		{
 			"only a turnstile frame",
 			`<iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/abcde/0x4AAAAAAABkMYinukE8nzY/light/normal"></iframe>`,
 			Turnstile, "0x4AAAAAAABkMYinukE8nzY",

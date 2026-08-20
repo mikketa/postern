@@ -196,6 +196,11 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 	tabCtx, cancel := context.WithTimeout(tabCtx, timeout)
 	defer cancel()
 
+	// Started before the first navigation: what explains a widget failing is
+	// often written while it is loading, and a listener installed afterwards
+	// would have missed it.
+	console := watchConsole(tabCtx)
+
 	start := time.Now()
 
 	// Navigating and crossing come first now, because the page has to be the
@@ -292,9 +297,9 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				if s.Error == errExpired && resets < maxResets {
 					var ok bool
 					if err := chromedp.Run(tabCtx, chromedp.Evaluate(resetScript, &ok)); err != nil || !ok {
-						return nil, fmt.Errorf("solver: %w: %s error %s%s%s", ErrVendor,
+						return nil, fmt.Errorf("solver: %w: %s error %s%s%s%s", ErrVendor,
 							req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error),
-							blockedBy(s.Blocked))
+							blockedBy(s.Blocked), console.said())
 					}
 					resets++
 					clicks, attempts = 0, 0
@@ -302,9 +307,9 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					log.Info("the challenge expired, starting it over", "resets", resets)
 					continue
 				}
-				return nil, fmt.Errorf("solver: %w: %s error %s%s%s", ErrVendor,
+				return nil, fmt.Errorf("solver: %w: %s error %s%s%s%s", ErrVendor,
 					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error),
-					blockedBy(s.Blocked))
+					blockedBy(s.Blocked), console.said())
 			}
 			if s.Token != "" {
 				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
