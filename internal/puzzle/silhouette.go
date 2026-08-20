@@ -55,16 +55,28 @@ func Resembles(a, b Shape) float64 {
 
 // fillEnclosed fills gaps that do not reach the edge, turning an outline into
 // the solid shape it draws.
+//
+// The border is closed first. These icons are drawn with a speckled stroke
+// that leaves pinholes all along it, and a flood fill does not care how small
+// a leak is: one missing pixel and the outside pours in, the fill adds
+// nothing, and an outlined shape is compared against a solid one as if it
+// were a ring. Dilating before the flood seals those pinholes; eroding the
+// result afterwards puts the shape back at its true size.
 func fillEnclosed(s Shape) Shape {
 	out := Shape{Mask: append([]bool(nil), s.Mask...), W: s.W, H: s.H,
 		CentreX: s.CentreX, CentreY: s.CentreY, MinX: s.MinX, MinY: s.MinY}
+
+	// Scaled to the drawing: a pinhole in a stroke is a fixed fraction of the
+	// icon, not a fixed number of pixels.
+	r := max(1, min(s.W, s.H)/12)
+	sealed := grow(s.Mask, s.W, s.H, r)
 
 	// Flood from the border: everything the flood misses is enclosed.
 	outside := make([]bool, s.W*s.H)
 	var queue []int
 	push := func(x, y int) {
 		i := y*s.W + x
-		if !s.Mask[i] && !outside[i] {
+		if !sealed[i] && !outside[i] {
 			outside[i] = true
 			queue = append(queue, i)
 		}
@@ -88,8 +100,15 @@ func fillEnclosed(s Shape) Shape {
 			}
 		}
 	}
+	inside := make([]bool, s.W*s.H)
+	for i := range inside {
+		inside[i] = !outside[i]
+	}
+	// Shrunk back by what the sealing added, then the stroke itself is put
+	// back: eroding alone would eat a thin outline that encloses nothing.
+	inside = shrink(inside, s.W, s.H, r)
 	for i := range out.Mask {
-		if !outside[i] {
+		if inside[i] {
 			out.Mask[i] = true
 		}
 	}
@@ -173,4 +192,52 @@ func normalise(s Shape) []bool {
 		}
 	}
 	return out
+}
+
+// grow thickens a mask by r pixels, sealing pinholes in a stroke.
+func grow(mask []bool, w, h, r int) []bool {
+	cur := append([]bool(nil), mask...)
+	for range r {
+		next := append([]bool(nil), cur...)
+		for y := range h {
+			for x := range w {
+				if !cur[y*w+x] {
+					continue
+				}
+				for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+					nx, ny := x+d[0], y+d[1]
+					if nx >= 0 && ny >= 0 && nx < w && ny < h {
+						next[ny*w+nx] = true
+					}
+				}
+			}
+		}
+		cur = next
+	}
+	return cur
+}
+
+// shrink is grow's inverse: a pixel survives only if all its neighbours are
+// set, so what grow added is taken back off.
+func shrink(mask []bool, w, h, r int) []bool {
+	cur := append([]bool(nil), mask...)
+	for range r {
+		next := append([]bool(nil), cur...)
+		for y := range h {
+			for x := range w {
+				if !cur[y*w+x] {
+					continue
+				}
+				for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+					nx, ny := x+d[0], y+d[1]
+					if nx < 0 || ny < 0 || nx >= w || ny >= h || !cur[ny*w+nx] {
+						next[y*w+x] = false
+						break
+					}
+				}
+			}
+		}
+		cur = next
+	}
+	return cur
 }
