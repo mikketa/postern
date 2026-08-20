@@ -64,20 +64,25 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved.
 //
-// Measured at 0 of 5 against the demo. The machinery works as far as it goes:
-// the picture segments into exactly the right icons, and the prompt splits
-// into exactly the right pictograms. What fails is pairing them. The picture's
-// icons are redrawn rather than copied — thick, coloured, textured, turned —
-// and matching them on shape (invariant moments, topology, proportions) picks
-// the wrong one often enough to be worthless. The vendor serves these from a
-// path named for the network that generated them, which is the point of them.
+// It is solved sometimes, which is not the same thing. Three measured runs of
+// five: 0 with invariant moments, then 2 and 1 once those were replaced by
+// comparing the silhouettes themselves. Somewhere around a third, and the gap
+// between 1 and 2 out of 5 is noise rather than progress.
 //
-// Skipped rather than left failing: a test that always fails stops being read,
-// and the failure here is a known missing capability rather than a regression.
-// Remove the skip when the pairing is replaced by something that can actually
-// recognise a drawing.
+// Everything around the recognition works. The picture segments into
+// candidates, the vendor's name is filtered back out of them — its letters
+// segment as well as icons do, and sit on a line at a steady pitch, which is
+// what gives them away — and the prompt splits into exactly the right
+// pictograms. What is left is telling a redrawn icon from a piece of scenery,
+// and the icons are redrawn rather than copied: thickened, recoloured,
+// textured, turned. The vendor serves them from a path named for the network
+// that generates them, which is the whole point of them.
+//
+// Getting from a third to reliable is not a matter of tuning this further; it
+// needs something that can recognise a drawing. Skipped rather than left
+// failing, because a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
-	t.Skip("not solved: shape matching pairs the icons wrongly, measured 0/5")
+	t.Skip("solved about a third of the time: see the comment above")
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 
