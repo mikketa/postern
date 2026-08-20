@@ -168,6 +168,9 @@ type Result struct {
 type state struct {
 	Token string `json:"token"`
 	Error string `json:"error"`
+
+	// Blocked is what the page's CSP refused while the widget was installing.
+	Blocked []string `json:"blocked"`
 }
 
 // Solve opens a tab on req.URL, renders the widget itself, and waits for the
@@ -289,8 +292,9 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 				if s.Error == errExpired && resets < maxResets {
 					var ok bool
 					if err := chromedp.Run(tabCtx, chromedp.Evaluate(resetScript, &ok)); err != nil || !ok {
-						return nil, fmt.Errorf("solver: %w: %s error %s%s", ErrVendor,
-							req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
+						return nil, fmt.Errorf("solver: %w: %s error %s%s%s", ErrVendor,
+							req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error),
+							blockedBy(s.Blocked))
 					}
 					resets++
 					clicks, attempts = 0, 0
@@ -298,8 +302,9 @@ func Solve(ctx context.Context, b *browser.Browser, req Request, timeout time.Du
 					log.Info("the challenge expired, starting it over", "resets", resets)
 					continue
 				}
-				return nil, fmt.Errorf("solver: %w: %s error %s%s", ErrVendor,
-					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error))
+				return nil, fmt.Errorf("solver: %w: %s error %s%s%s", ErrVendor,
+					req.kindOrDefault(), s.Error, hint(req.kindOrDefault(), s.Error),
+					blockedBy(s.Blocked))
 			}
 			if s.Token != "" {
 				log.Info("token", "after", time.Since(start).Round(time.Millisecond),
@@ -501,8 +506,22 @@ func stateScript(tokenField string) string {
   if (s.token || s.error) return s;
 
   const field = document.querySelector('#postern-widget [name="%s"]');
-  return { token: (field && field.value) || '', error: '' };
+  return { token: (field && field.value) || '', error: '', blocked: s.blocked || [] };
 })()`, tokenField)
+}
+
+// blockedBy turns recorded CSP violations into a sentence, or nothing.
+//
+// It matters because the failure it explains is otherwise unreadable: the
+// vendor's error callback fires with no argument, and the real cause is a
+// policy on the page that never reaches the widget at all.
+func blockedBy(violations []string) string {
+	if len(violations) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(". The page's Content-Security-Policy blocked %s, "+
+		"so the widget could not load what it needed",
+		strings.Join(violations, ", "))
 }
 
 // rect is the widget's box in viewport coordinates.
@@ -591,6 +610,19 @@ func clickCheckbox(ctx context.Context, frameHost string) error {
 // them with it. Leaving the page intact is also the more honest position —
 // the widget then sits in the document it claims to belong to.
 const hostSetup = `
+  // What the page's own Content-Security-Policy refuses. A site that allows
+  // its vendor by nonce rather than by origin allows the script it wrote and
+  // nothing else, so the one we add is blocked — and the widget then fails
+  // through its error callback, which carries no reason at all. Recording the
+  // violations turns that dead end into a sentence naming the directive.
+  window.__postern = window.__postern || { token: '', error: '' };
+  window.__postern.blocked = [];
+  document.addEventListener('securitypolicyviolation', (e) => {
+    const at = ((e.violatedDirective || '') + ' ' + (e.blockedURI || '')).trim();
+    const seen = window.__postern.blocked;
+    if (seen.length < 5 && !seen.includes(at)) seen.push(at);
+  });
+
   const previous = document.getElementById('postern-widget');
   if (previous) previous.remove();
 

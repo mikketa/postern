@@ -30,6 +30,9 @@ const (
 	detectEvery = 250 * time.Millisecond
 )
 
+// enterpriseFrame is the How value for a key served by reCAPTCHA Enterprise.
+const enterpriseFrame = "recaptcha-enterprise iframe"
+
 // found is what the page says about its own widget.
 type found struct {
 	Kind Kind   `json:"kind"`
@@ -64,10 +67,16 @@ const detectScript = `(() => {
     return hit(byShape(key), key, 'data-sitekey');
   }
 
-  // The anchor frame carries the key as ?k=.
+  // The anchor frame carries the key as ?k=. Its path also says which product
+  // rendered it: Enterprise serves /recaptcha/enterprise/anchor, the free
+  // tiers /recaptcha/api2/anchor. They look identical from the key alone —
+  // both begin 6L — and they are not interchangeable.
   for (const f of document.querySelectorAll('iframe[src*="recaptcha"]')) {
-    const m = (f.src || '').match(/[?&]k=([^&]+)/);
-    if (m) return hit('recaptcha-v2', decodeURIComponent(m[1]), 'recaptcha iframe');
+    const src = f.src || '';
+    const m = src.match(/[?&]k=([^&]+)/);
+    if (!m) continue;
+    const how = /\/enterprise\//.test(src) ? 'recaptcha-enterprise iframe' : 'recaptcha iframe';
+    return hit('recaptcha-v2', decodeURIComponent(m[1]), how);
   }
 
   // Turnstile puts the key in a path segment rather than a query parameter.
@@ -101,6 +110,17 @@ func detect(ctx context.Context, log *slog.Logger) (found, error) {
 			if f.Key != "" {
 				log.Info("found the widget on the page",
 					"kind", f.Kind, "sitekey", f.Key, "how", f.How)
+				// Refused here rather than left to fail at the widget.
+				// Enterprise renders through grecaptcha.enterprise and
+				// enterprise.js; loading api.js against an Enterprise key gets
+				// an error-callback with nothing in it that says why, which is
+				// a bad half-hour for whoever has to work out what happened.
+				if f.How == enterpriseFrame {
+					return found{}, fmt.Errorf("solver: %w: %s is a reCAPTCHA "+
+						"Enterprise key, which postern does not speak yet — it "+
+						"renders through enterprise.js, not api.js",
+						ErrInvalidRequest, f.Key)
+				}
 				return f, nil
 			}
 		}
