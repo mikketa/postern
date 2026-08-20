@@ -140,8 +140,8 @@ curl -s localhost:8099/solve -d '{
 
 | Field | Type | Required | Notes |
 | :--- | :--- | :---: | :--- |
-| `url` | string | yes | The page the widget belongs to — it decides the origin |
-| `sitekey` | string | yes | Found in the target page markup |
+| `url` | string | yes | The page the widget belongs to — it decides the origin, and is where the sitekey is read from |
+| `sitekey` | string | no | Read off the page when left out. Pass it to override what is found there |
 | `kind` | string | no | As above. Defaults to `turnstile` |
 | `action` | string | no | Turnstile and reCAPTCHA v3; must match what the site uses |
 | `cdata` | string | no | Turnstile only |
