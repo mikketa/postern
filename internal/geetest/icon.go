@@ -70,18 +70,25 @@ func SolveIcon(ctx context.Context) error {
 }
 
 func capture(ctx context.Context, b Box) (image.Image, error) {
-	var raw []byte
-	if err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
-		var err error
-		raw, err = page.CaptureScreenshot().WithClip(&page.Viewport{
-			X: b.X, Y: b.Y, Width: b.W, Height: b.H, Scale: 1,
-		}).Do(c)
-		return err
-	})); err != nil {
+	raw, err := captureRaw(ctx, b)
+	if err != nil {
 		return nil, err
 	}
 	img, _, err := image.Decode(bytes.NewReader(raw))
 	return img, err
+}
+
+// captureRaw returns the encoded screenshot of one element.
+func captureRaw(ctx context.Context, b Box) ([]byte, error) {
+	var raw []byte
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
+		var e error
+		raw, e = page.CaptureScreenshot().WithClip(&page.Viewport{
+			X: b.X, Y: b.Y, Width: b.W, Height: b.H, Scale: 1,
+		}).Do(c)
+		return e
+	}))
+	return raw, err
 }
 
 // clickIfPresent presses something when it is there, and says nothing when it
