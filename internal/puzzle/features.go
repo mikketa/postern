@@ -18,14 +18,14 @@ import "math"
 // adjustment traded one challenge for another.
 
 // FeatureCount is the length of a comparison vector.
-const FeatureCount = 12
+const FeatureCount = 13
 
 // FeatureNames label the vector, for reading a trained model back.
 var FeatureNames = [FeatureCount]string{
 	"overlap.best", "overlap.upright", "overlap.margin",
 	"density.diff", "elongation.diff", "holes.diff",
-	"drawn.candidate", "size.relative", "hu.distance",
-	"compact.diff", "fill.candidate", "bias",
+	"stroke.wander", "size.relative", "hu.distance",
+	"compact.diff", "fill.ratio", "chamfer.best", "bias",
 }
 
 // Features compares one pictogram against one candidate.
@@ -44,6 +44,14 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 	// one that only matches upside down.
 	best, upright := 0.0, 0.0
 	second := 0.0
+	// Overlap counts a pixel as agreeing or not and nothing in between, which
+	// is harsh on a shape traced by hand: a stroke a pixel or two off its mark
+	// scores as if it were somewhere else entirely. The chamfer distance asks
+	// instead how far each pixel is from the other shape, so a near miss reads
+	// as a near miss. Both are measured; which is worth more is for the fitting
+	// to decide.
+	dw := distances(nw)
+	chamfer := math.Inf(1)
 	for i := range rotations {
 		ng := normalise(rotate(gf, float64(i)*2*math.Pi/rotations))
 		s := jaccard(nw, ng)
@@ -55,6 +63,12 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 		} else if s > second {
 			second = s
 		}
+		if d := chamferBoth(nw, dw, ng); d < chamfer {
+			chamfer = d
+		}
+	}
+	if math.IsInf(chamfer, 1) {
+		chamfer = float64(normalSize)
 	}
 	f[0] = best
 	f[1] = upright
@@ -65,7 +79,13 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 	f[3] = math.Abs(density(want) - density(got))
 	f[4] = math.Abs(elongation(want) - elongation(got))
 	f[5] = math.Abs(float64(holes(wf) - holes(gf)))
-	f[6] = Drawn(got)
+
+	// How much of the candidate is edge. A solid blob's border grows as the
+	// square root of its area, a drawn stroke's grows with the area itself, so
+	// this separates an icon from a letter cut out of card. Handed over raw:
+	// squashing it into a tidy 0-to-1 verdict first, with a threshold chosen by
+	// hand, throws away the part the model is meant to weigh.
+	f[6] = wander(got)
 
 	// Size against the other candidates: one challenge's icons are drawn at
 	// one scale, so an outlier is usually scenery.
@@ -73,8 +93,17 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 
 	f[8] = huDistance(wf, gf)
 	f[9] = math.Abs(compactness(want) - compactness(got))
-	f[10] = density(got)
-	f[11] = 1 // bias
+
+	// What filling the candidate added. An icon drawn as an outline encloses
+	// far more than it covers, so this sits well below one; scenery that was
+	// already solid sits at one. Measured against the shape's own area rather
+	// than its bounding box, which a diagonal stroke inflates.
+	f[10] = 0
+	if gf.Pixels > 0 {
+		f[10] = float64(got.Pixels) / float64(gf.Pixels)
+	}
+	f[11] = chamfer
+	f[12] = 1 // bias
 
 	return f
 }
@@ -255,4 +284,83 @@ func huMoments(s Shape) [7]float64 {
 		}
 	}
 	return h
+}
+
+// wander is the share of a shape's pixels that lie on its border.
+func wander(s Shape) float64 {
+	if s.Pixels == 0 {
+		return 0
+	}
+	border := 0
+	for y := range s.H {
+		for x := range s.W {
+			if !s.Mask[y*s.W+x] {
+				continue
+			}
+			for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+				nx, ny := x+d[0], y+d[1]
+				if nx < 0 || ny < 0 || nx >= s.W || ny >= s.H || !s.Mask[ny*s.W+nx] {
+					border++
+					break
+				}
+			}
+		}
+	}
+	return float64(border) / float64(s.Pixels)
+}
+
+// distances is the distance from every cell to the nearest set cell, in steps
+// of a chess king. Unset shapes get the grid's width, which is further than
+// anything inside it.
+func distances(m []bool) []float64 {
+	const n = normalSize
+	d := make([]float64, n*n)
+	queue := make([]int, 0, n*n)
+	for i, on := range m {
+		if on {
+			d[i] = 0
+			queue = append(queue, i)
+		} else {
+			d[i] = float64(n)
+		}
+	}
+	for head := 0; head < len(queue); head++ {
+		i := queue[head]
+		x, y := i%n, i/n
+		for dy := -1; dy <= 1; dy++ {
+			for dx := -1; dx <= 1; dx++ {
+				nx, ny := x+dx, y+dy
+				if nx < 0 || ny < 0 || nx >= n || ny >= n {
+					continue
+				}
+				j := ny*n + nx
+				if d[j] > d[i]+1 {
+					d[j] = d[i] + 1
+					queue = append(queue, j)
+				}
+			}
+		}
+	}
+	return d
+}
+
+// chamferBoth is the mean distance from each shape to the other, symmetrised
+// so that neither shape can win by being small enough to hide inside the other.
+func chamferBoth(a []bool, da []float64, b []bool) float64 {
+	db := distances(b)
+	var sa, sb, na, nb float64
+	for i := range a {
+		if a[i] {
+			sa += db[i]
+			na++
+		}
+		if b[i] {
+			sb += da[i]
+			nb++
+		}
+	}
+	if na == 0 || nb == 0 {
+		return float64(normalSize)
+	}
+	return 0.5 * (sa/na + sb/nb)
 }
