@@ -179,7 +179,7 @@ func TestTrainIconModel(t *testing.T) {
 	}
 	folds := 4
 	var accs []float64
-	var wholes [][2]int
+	var wholes, basewholes [][2]int
 	for fold := range folds {
 		var train, test [][]Sample
 		for i, g := range groups {
@@ -192,7 +192,7 @@ func TestTrainIconModel(t *testing.T) {
 		if len(test) == 0 || len(train) == 0 {
 			continue
 		}
-		m, err := Train(train, 400, 0.05, 0.3)
+		m, err := Train(train, 400, 0.05, 0.01)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +203,7 @@ func TestTrainIconModel(t *testing.T) {
 		// candidate ranks first, but whether the whole arrangement is right.
 		// A challenge is passed or failed as a whole, so three pictograms at
 		// two thirds each is not two thirds of a challenge.
-		whole, wholeOK := 0, 0
+		whole, wholeOK, baseOK := 0, 0, 0
 		for _, n := range names {
 			c, ok := challenges[n]
 			if !ok || seen[n]%folds != fold {
@@ -223,21 +223,27 @@ func TestTrainIconModel(t *testing.T) {
 				continue
 			}
 			whole++
-			pair, err := pairWith(m, c.wanted, c.found)
-			if err != nil {
-				continue
-			}
-			right := true
-			for i, j := range pair.Order {
-				if j != answer[i] {
-					right = false
+			for _, cand := range []struct {
+				m  Model
+				at *int
+			}{{m, &wholeOK}, {overlapOnly, &baseOK}} {
+				pair, err := pairWith(cand.m, c.wanted, c.found)
+				if err != nil {
+					continue
 				}
-			}
-			if right {
-				wholeOK++
+				right := true
+				for i, j := range pair.Order {
+					if j != answer[i] {
+						right = false
+					}
+				}
+				if right {
+					*cand.at++
+				}
 			}
 		}
 		wholes = append(wholes, [2]int{wholeOK, whole})
+		basewholes = append(basewholes, [2]int{baseOK, whole})
 		t.Logf("fold %d: %d groupes de test, precision %.2f — defis entiers %d/%d",
 			fold, len(test), a, wholeOK, whole)
 	}
@@ -250,13 +256,16 @@ func TestTrainIconModel(t *testing.T) {
 	}
 	t.Logf("PRECISION VALIDEE: %.3f", mean)
 
-	var ok, tot int
-	for _, w := range wholes {
+	var ok, tot, baseOK int
+	for i, w := range wholes {
 		ok += w[0]
 		tot += w[1]
+		baseOK += basewholes[i][0]
 	}
 	if tot > 0 {
 		t.Logf("DEFIS ENTIERS VALIDES: %d/%d = %.3f", ok, tot, float64(ok)/float64(tot))
+		t.Logf("DEFIS ENTIERS, RECOUVREMENT SEUL: %d/%d = %.3f",
+			baseOK, tot, float64(baseOK)/float64(tot))
 	}
 
 	// A baseline to beat: pick whichever candidate overlaps most.
@@ -300,7 +309,7 @@ func TestTrainIconModel(t *testing.T) {
 		}
 	}
 
-	final, err := Train(groups, 600, 0.05, 0.3)
+	final, err := Train(groups, 600, 0.05, 0.01)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +320,18 @@ func TestTrainIconModel(t *testing.T) {
 		emit(t, out, final)
 	}
 }
+
+// overlapOnly is the rule the model replaced: rank by silhouette overlap and
+// nothing else. Kept as the thing to beat, on the whole arrangement and not
+// only on one pictogram at a time.
+var overlapOnly = func() Model {
+	var m Model
+	m.Weights[0] = 1
+	for i := range m.Scale {
+		m.Scale[i] = 1
+	}
+	return m
+}()
 
 func buildSheet(t *testing.T, dir string, c challenge) {
 	bg, _ := readImage(dir + "/" + c.name + "/bg.png")
