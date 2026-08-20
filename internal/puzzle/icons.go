@@ -170,10 +170,17 @@ func dropLettering(in []Shape) []Shape {
 
 // FindPictograms cuts the prompt strip into the shapes it is asking for.
 //
-// Split by columns rather than by connected regions: a pictogram is often
-// drawn in separate pieces — a figure with a detached head — and treating
-// each piece as a separate request would ask for the wrong things, in the
-// wrong number.
+// Splitting on empty columns was the obvious way and it miscounts: on a bench
+// of twelve collected prompts it found three only eight times, once finding a
+// single shape where there were plainly three, and once four. Both directions
+// are fatal — the number of pictograms is the number of icons to click, so
+// getting it wrong fails the challenge before any recognition happens.
+//
+// The strip is laid out regularly instead: square pictograms, evenly spaced,
+// filling its height. So the count comes from the geometry — how many
+// pictogram-heights fit across the occupied width — and the strip is then cut
+// into that many equal parts. A pictogram drawn in separate pieces, a figure
+// with a detached head, stays one shape rather than becoming two.
 func FindPictograms(img image.Image, minValue float64) []Shape {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
@@ -187,35 +194,40 @@ func FindPictograms(img image.Image, minValue float64) []Shape {
 		}
 	}
 
-	full := make([]bool, w)
-	for x := range w {
-		for y := range h {
+	// The occupied box: the strip is usually wider than what is drawn on it.
+	minX, maxX, minY, maxY := w, -1, h, -1
+	for y := range h {
+		for x := range w {
 			if mask[y*w+x] {
-				full[x] = true
-				break
+				minX, maxX = min(minX, x), max(maxX, x)
+				minY, maxY = min(minY, y), max(maxY, y)
 			}
 		}
 	}
+	if maxX < 0 {
+		return nil
+	}
+	span := maxX - minX + 1
 
-	var out []Shape
-	for x := 0; x < w; x++ {
-		if !full[x] {
-			continue
-		}
-		start, gap := x, 0
-		for x++; x < w && gap < 3; x++ {
-			if full[x] {
-				gap = 0
-			} else {
-				gap++
-			}
-		}
-		end := x - gap
+	// Square and side by side, so the count is the width over the height.
+	//
+	// The strip's own height is the reference, not the height of what is drawn
+	// on it: a pictogram that does not reach the top and bottom makes the
+	// occupied height too small and the count comes out one too many, which
+	// two of twelve collected prompts did.
+	pitch := h
+	count := int(math.Round(float64(span) / float64(pitch)))
+	count = min(max(count, 1), 8)
+
+	out := make([]Shape, 0, count)
+	for i := range count {
+		from := minX + span*i/count
+		to := minX + span*(i+1)/count - 1
 		var cells []int
 		for y := range h {
-			for cx := start; cx <= end && cx < w; cx++ {
-				if mask[y*w+cx] {
-					cells = append(cells, y*w+cx)
+			for x := from; x <= to && x < w; x++ {
+				if mask[y*w+x] {
+					cells = append(cells, y*w+x)
 				}
 			}
 		}
@@ -228,11 +240,11 @@ func FindPictograms(img image.Image, minValue float64) []Shape {
 
 // Pairing is an answer, with how much it should be trusted.
 //
-// The confidence is the point of it. Recognising these icons works about a
-// third of the time, and a solver that clicks regardless is wrong twice for
-// every time it is right. A solver that knows when it is guessing can ask for
-// a different picture instead — which is what the widget's refresh button is
-// for, and what a person does when they cannot make out the drawing.
+// The confidence is the point of it. Recognising these icons works some of the
+// time, and a solver that clicks regardless is wrong more often than not. A
+// solver that knows when it is guessing can ask for a different picture
+// instead — which is what the widget's refresh button is for, and what a
+// person does when they cannot make out the drawing.
 type Pairing struct {
 	// Order[i] is the icon answering pictogram i.
 	Order []int

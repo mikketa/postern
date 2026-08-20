@@ -64,18 +64,23 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved.
 //
-// It is solved sometimes, which is not the same thing: 4 attempts out of 25,
-// across five measured runs of five (0, 2, 1, 0, 1). About a sixth, with no
+// It is solved sometimes, which is not the same thing: 5 attempts out of 30,
+// across six measured runs of five (0, 2, 1, 0, 1, 1). About a sixth, with no
 // trend — the differences between those runs are noise.
 //
 // The parts around the recognition were each fixed against a bench of twelve
-// collected challenges, and each fix was real and none of them moved the
-// number. Segmentation found fewer icons than the prompt asked for on five of
-// the twelve, which cannot be recovered from later; it now loosens until it
-// has enough. Outlined icons segmented twice, as a border and as what the
-// border encloses, taking two of the three places available; nested
-// candidates are now merged. The vendor's name segments as readily as an icon
-// and is filtered back out.
+// collected challenges. Every fix was real, verified on all twelve, and not
+// one of them moved the live number.
+//
+// Segmentation found fewer icons than the prompt asked for on five of the
+// twelve, which no later stage recovers from; it now loosens until it has
+// enough. Outlined icons segmented twice, as a border and as what the border
+// encloses, taking two of the three places available; nested candidates are
+// merged. The vendor's name segments as readily as an icon and is filtered
+// back out. And the prompt itself was split on empty columns, which counted
+// three pictograms on only eight of the twelve — once one, once four — so the
+// wrong number of icons was clicked before recognition even began; it is now
+// cut by the strip's geometry, and counts three on all twelve.
 //
 // What is left is the recognition itself, and it is the whole difficulty. The
 // icons are redrawn rather than copied — thickened, recoloured, textured,
