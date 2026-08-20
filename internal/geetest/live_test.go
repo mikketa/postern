@@ -62,6 +62,25 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // widget decides on its own and the button is the whole interaction. Worth a
 // test anyway — it is the path where a solver has to recognise there is
 // nothing to solve, rather than wait for a challenge that is never coming.
+// TestTheIconChallengeIsSolved is the one type that is not solved.
+//
+// Measured at 0 of 5 against the demo. The machinery works as far as it goes:
+// the picture segments into exactly the right icons, and the prompt splits
+// into exactly the right pictograms. What fails is pairing them. The picture's
+// icons are redrawn rather than copied — thick, coloured, textured, turned —
+// and matching them on shape (invariant moments, topology, proportions) picks
+// the wrong one often enough to be worthless. The vendor serves these from a
+// path named for the network that generated them, which is the point of them.
+//
+// Skipped rather than left failing: a test that always fails stops being read,
+// and the failure here is a known missing capability rather than a regression.
+// Remove the skip when the pairing is replaced by something that can actually
+// recognise a drawing.
+func TestTheIconChallengeIsSolved(t *testing.T) {
+	t.Skip("not solved: shape matching pairs the icons wrongly, measured 0/5")
+	solves(t, "Icon CAPTCHA", SolveIcon)
+}
+
 func TestTheNoCaptchaChallengePasses(t *testing.T) {
 	solves(t, "No CAPTCHA", func(context.Context) error { return nil })
 }

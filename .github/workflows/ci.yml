@@ -93,6 +93,19 @@ jobs:
 
       - run: go test -timeout 20m ./...
 
+      # The vendor challenges, driven end to end. One attempt per type rather
+      # than the five a local run does: this fires at somebody else's demo on
+      # every push, and five types times five attempts is a rude number of
+      # requests to make of it. A type that is broken fails on one attempt too.
+      #
+      # Under xvfb-run because these widgets refuse headless — measured at 0
+      # successes against 7 with a display — and the suite above skips them
+      # when no display is exported.
+      - name: geetest challenges
+        env:
+          POSTERN_GEETEST_RUNS: 1
+        run: xvfb-run -a go test -timeout 15m -v ./internal/geetest/
+
   # The container image, built and actually run. An image that compiles is not
   # an image that works: what breaks in here is Chromium failing to start under
   # a container's default seccomp profile, and only starting it finds that.
