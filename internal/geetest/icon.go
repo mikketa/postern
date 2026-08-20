@@ -57,10 +57,10 @@ func SolveIcon(ctx context.Context) error {
 		return fmt.Errorf("geetest: capturing the prompt: %w", err)
 	}
 
+	wanted := puzzle.FindPictograms(prompt, 140)
 	// 200 pixels: smaller than any drawn icon and larger than the flecks of
 	// stray colour these backgrounds carry.
-	found := puzzle.FindIcons(picture, 200)
-	wanted := puzzle.FindPictograms(prompt, 140)
+	found := puzzle.FindIcons(picture, 200, len(wanted))
 	pairing, err := puzzle.PairIcons(wanted, found)
 	if err != nil {
 		return fmt.Errorf("geetest: %w", err)

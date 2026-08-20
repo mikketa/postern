@@ -64,11 +64,25 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved.
 //
-// It is solved sometimes, which is not the same thing. Four measured runs of
-// five: 0 with invariant moments; 2 then 1 once those were replaced by
-// comparing the silhouettes themselves; 0 again when the solver was allowed
-// to refresh past pictures it judged unreadable. Somewhere around a fifth to
-// a third, with no trend — the differences between those runs are noise.
+// It is solved sometimes, which is not the same thing: 4 attempts out of 25,
+// across five measured runs of five (0, 2, 1, 0, 1). About a sixth, with no
+// trend — the differences between those runs are noise.
+//
+// The parts around the recognition were each fixed against a bench of twelve
+// collected challenges, and each fix was real and none of them moved the
+// number. Segmentation found fewer icons than the prompt asked for on five of
+// the twelve, which cannot be recovered from later; it now loosens until it
+// has enough. Outlined icons segmented twice, as a border and as what the
+// border encloses, taking two of the three places available; nested
+// candidates are now merged. The vendor's name segments as readily as an icon
+// and is filtered back out.
+//
+// What is left is the recognition itself, and it is the whole difficulty. The
+// icons are redrawn rather than copied — thickened, recoloured, textured,
+// turned — and they are hidden among scenery that is deliberately icon-like:
+// lettering cut from card, photographed objects in strong colour. Telling one
+// from the other is what a trained classifier does. Comparing silhouettes gets
+// a sixth of them, which is well above chance and nowhere near reliable.
 //
 // Everything around the recognition works. The picture segments into
 // candidates, the vendor's name is filtered back out of them — its letters
@@ -83,7 +97,7 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // needs something that can recognise a drawing. Skipped rather than left
 // failing, because a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
-	t.Skip("solved unreliably: around a fifth to a third, see the comment above")
+	t.Skip("solved about a sixth of the time: see the comment above")
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 

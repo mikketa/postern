@@ -33,7 +33,10 @@ type Shape struct {
 // and treated as the background — the majority always is — and what stands
 // well away from it is an icon. Thresholding on saturation instead was tried
 // first and swallowed the whole picture: these backgrounds are saturated too.
-func FindIcons(img image.Image, minPixels int) []Shape {
+// want is how many icons the prompt asks for: the search loosens until it has
+// at least that many, because fewer is a guaranteed failure. Pass 0 to take
+// whatever the strictest pass yields.
+func FindIcons(img image.Image, minPixels, want int) []Shape {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 
@@ -54,16 +57,24 @@ func FindIcons(img image.Image, minPixels int) []Shape {
 	}
 	domHue := float64(dom)*10 + 5
 
-	// Progressively looser thresholds. One challenge in five yielded nothing
-	// at all under the strict rule — its icons sit close in hue to their
-	// background — and no candidates is a guaranteed failure, while loose
-	// candidates are merely harder to choose between. The strict pass runs
-	// first so the easy challenges are not made harder.
+	// Progressively looser thresholds, until there are at least as many
+	// candidates as the prompt asks for.
+	//
+	// Measured over twelve collected challenges, the strict rule found fewer
+	// than the three icons asked for on five of them — and too few candidates
+	// cannot be recovered from later, while too many are merely harder to
+	// choose between. An earlier version only loosened when it found nothing
+	// at all, which never fired: the failing cases yielded one or two.
+	//
+	// The strict pass still runs first, so challenges that separate cleanly
+	// are not made harder.
 	var out []Shape
 	for _, look := range []struct{ sat, value, away float64 }{
 		{0.35, 60, 60},
-		{0.25, 45, 40},
-		{0.15, 30, 25},
+		{0.28, 50, 45},
+		{0.22, 40, 32},
+		{0.15, 30, 22},
+		{0.10, 25, 15},
 	} {
 		mask := make([]bool, w*h)
 		for y := range h {
@@ -73,7 +84,11 @@ func FindIcons(img image.Image, minPixels int) []Shape {
 					hueApart(hue, domHue) > look.away
 			}
 		}
-		if out = dropLettering(components(mask, w, h, minPixels)); len(out) > 0 {
+		got := dropLettering(mergeNested(components(mask, w, h, minPixels)))
+		if len(got) > len(out) {
+			out = got
+		}
+		if len(out) >= want && len(out) > 0 {
 			break
 		}
 	}
@@ -274,6 +289,12 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 			// independently. An arrangement that mixes a large shape with a
 			// small one is usually picking up scenery.
 			sc += spread(found, cur)
+			// Prefer candidates that look drawn rather than solid: the
+			// scenery in these pictures is lettering and photographed
+			// objects, and both are solid where an icon is a stroke.
+			for _, j := range cur {
+				sc += 0.45 * (1 - Drawn(found[j]))
+			}
 			switch {
 			case sc < bestScore:
 				bestScore, runnerUp = sc, bestScore
@@ -412,4 +433,76 @@ func spread(found []Shape, pick []int) float64 {
 	}
 	// 1.0 for shapes of equal size, rising with the ratio between them.
 	return 0.35 * (largest/smallest - 1)
+}
+
+// mergeNested collapses candidates that sit inside one another.
+//
+// An icon drawn as an outline segments twice over — once as its border and
+// again as whatever the border encloses — and both arrive as candidates. On a
+// collected challenge that cost two of the three places available, leaving the
+// real answer nowhere to go. Whichever is larger stands for both.
+func mergeNested(in []Shape) []Shape {
+	inside := func(a, b Shape) bool {
+		// a within b, allowing a small overhang for ragged edges.
+		const slack = 4
+		return a.MinX >= b.MinX-slack && a.MinY >= b.MinY-slack &&
+			a.MinX+a.W <= b.MinX+b.W+slack && a.MinY+a.H <= b.MinY+b.H+slack
+	}
+	drop := make([]bool, len(in))
+	for i := range in {
+		for j := range in {
+			if i == j || drop[i] || drop[j] {
+				continue
+			}
+			if inside(in[i], in[j]) && in[i].W*in[i].H < in[j].W*in[j].H {
+				drop[i] = true
+			}
+		}
+	}
+	out := in[:0:0]
+	for i, s := range in {
+		if !drop[i] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// Drawn reports how much a shape looks hand-drawn rather than solid, from 0 to
+// 1.
+//
+// The icons in these challenges are drawn in outline — a wandering stroke that
+// leaves most of its own bounding box empty — while the scenery they hide
+// among is solid: letters cut from card, photographed objects. Two cheap
+// measures separate them. A stroke fills little of the box it occupies, and
+// its border is long for the area it encloses, because it wanders.
+func Drawn(s Shape) float64 {
+	if s.W == 0 || s.H == 0 || s.Pixels == 0 {
+		return 0
+	}
+	density := float64(s.Pixels) / float64(s.W*s.H)
+
+	// Border pixels: filled cells with at least one empty neighbour.
+	border := 0
+	for y := range s.H {
+		for x := range s.W {
+			if !s.Mask[y*s.W+x] {
+				continue
+			}
+			for _, d := range [][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+				nx, ny := x+d[0], y+d[1]
+				if nx < 0 || ny < 0 || nx >= s.W || ny >= s.H || !s.Mask[ny*s.W+nx] {
+					border++
+					break
+				}
+			}
+		}
+	}
+	// A solid blob's border grows as the square root of its area; a stroke's
+	// grows with the area itself. The ratio is near 0 for one and near 1 for
+	// the other.
+	wander := float64(border) / float64(s.Pixels)
+
+	sparse := 1 - math.Min(density/0.55, 1)
+	return math.Min(0.5*sparse+0.5*math.Min(wander/0.8, 1), 1)
 }
