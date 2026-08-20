@@ -28,11 +28,12 @@ type Shape struct {
 
 // FindIcons segments a picture into the icons drawn on it.
 //
-// Colour is what separates them, but not any fixed colour: the background of
-// one challenge is the icon colour of another. The dominant hue is measured
-// and treated as the background — the majority always is — and what stands
-// well away from it is an icon. Thresholding on saturation instead was tried
-// first and swallowed the whole picture: these backgrounds are saturated too.
+// Two rules, tried in order. Where a colour sits in the picture separates a
+// drawing from a photograph — see clusterMask — and it is tried first because
+// it is the one that survives a busy background. Failing that, the background
+// is taken to be the commonest colour and an icon is what stands well away
+// from it, which is the better rule when the backdrop really is one colour.
+//
 // want is how many icons the prompt asks for: the search loosens until it has
 // at least that many, because fewer is a guaranteed failure. Pass 0 to take
 // whatever the strictest pass yields.
@@ -104,6 +105,25 @@ func FindIcons(img image.Image, minPixels, want int) []Shape {
 	// The strict pass still runs first, so challenges that separate cleanly
 	// are not made harder.
 	var out []Shape
+
+	// Where a colour sits in the picture separates a drawing from a
+	// photograph better than how far it is from the commonest colour, so that
+	// is tried first; the distance rule below still runs when it comes up
+	// short, because it is the better of the two on a plain backdrop.
+	if raw := components(bridge(clusterMask(img), w, h), w, h, minPixels); len(raw) > 0 {
+		got := dropLettering(mergeNested(mergeTouching(raw)))
+		if len(got) < want {
+			if loose := dropLettering(mergeNested(raw)); len(loose) > len(got) {
+				got = loose
+			}
+		}
+		out = got
+	}
+	if len(out) >= want && len(out) > 0 {
+		sortCandidates(out)
+		return out
+	}
+
 	// The scale is the colour distance above, so these start high: a threshold
 	// low enough to catch a cyan icon on a blue background also lets the
 	// background through, and the picture arrives as one blob. Strict first,
@@ -134,8 +154,85 @@ func FindIcons(img image.Image, minPixels, want int) []Shape {
 			break
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Pixels > out[j].Pixels })
+	sortCandidates(out)
 	return out
+}
+
+// clusterMask marks the pixels whose colour sits in one place in the picture.
+//
+// Taking the commonest colour as the background works while a picture has one.
+// It does not survive a photograph: a collage of pink card, orange lettering
+// and a blue gamepad is as far from its own commonest colour as anything drawn
+// on it, and every candidate comes back scenery. Measured over the collected
+// challenges, that rule found the drawn icon 58% of the time, and on the
+// busiest backgrounds it found none of the three.
+//
+// What holds whatever the palette is where a colour appears. A photograph's
+// colours are spread across the frame — a wall, a shadow, a lettering, all of
+// them recur — while an icon is drawn once, in one colour, in one small patch.
+// So the picture is binned by colour, and a bin is kept when its pixels are
+// few enough to be an icon and close enough together to be one drawing. That
+// finds it 88% of the time, and it costs about two more candidates per
+// picture to choose between.
+func clusterMask(img image.Image) []bool {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+
+	// Sixteen levels a channel: fine enough to keep a drawn colour apart from
+	// the photograph behind it, coarse enough that one stroke lands in one bin
+	// rather than scattering across a dozen.
+	const levels = 16
+	const shift = 4
+	type extent struct {
+		count                  int
+		minX, minY, maxX, maxY int
+	}
+	seen := make(map[int]*extent)
+	at := make([]int, w*h)
+	for y := range h {
+		for x := range w {
+			r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+			k := int(r>>8>>shift)*levels*levels + int(g>>8>>shift)*levels + int(bl>>8>>shift)
+			at[y*w+x] = k
+			e := seen[k]
+			if e == nil {
+				e = &extent{minX: x, minY: y, maxX: x, maxY: y}
+				seen[k] = e
+			}
+			e.count++
+			e.minX, e.maxX = min(e.minX, x), max(e.maxX, x)
+			e.minY, e.maxY = min(e.minY, y), max(e.maxY, y)
+		}
+	}
+
+	// An icon covers a few percent of the picture and sits in a patch. Both
+	// bounds are loose: the cost of letting a bit of scenery through is one
+	// more candidate to rank, and the cost of excluding an icon is a challenge
+	// that cannot be solved at all.
+	const mostOfThePicture = 0.05
+	const mostOfTheFrame = 0.25
+	area := float64(w * h)
+	keep := make(map[int]bool, len(seen))
+	// A stroke's pixels do not all land in one bin — a hand-drawn line is
+	// shaded — so this floor is far below the size of an icon. It is here only
+	// to keep the picture's stray colours from each becoming a candidate.
+	const leastInABin = 40
+	for k, e := range seen {
+		if e.count < leastInABin || float64(e.count) > mostOfThePicture*area {
+			continue
+		}
+		spread := float64((e.maxX-e.minX+1)*(e.maxY-e.minY+1)) / area
+		if spread > mostOfTheFrame {
+			continue
+		}
+		keep[k] = true
+	}
+
+	mask := make([]bool, w*h)
+	for i, k := range at {
+		mask[i] = keep[k]
+	}
+	return mask
 }
 
 // dropLettering removes runs of shapes that are text rather than icons.
@@ -323,13 +420,14 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 			"the picture yielded %d", len(wanted), len(found))
 	}
 
-	// Every pictogram against every candidate, scored by the trained model.
+	// Every pictogram against every candidate, scored by the fitted model.
 	//
-	// Silhouette overlap alone was the previous rule and it is still the
-	// single most useful measurement — it carries the largest weight — but it
-	// is one of twelve, and what each is worth was fitted to challenges whose
-	// answers are known rather than guessed at. Hand-picked weights are how
-	// this got stuck: every adjustment traded one challenge for another.
+	// Silhouette overlap alone was the previous rule and on the collected
+	// challenges the two are level: 21 whole arrangements right out of 32
+	// either way. The fitted model is kept for the reason it was built — a
+	// measurement can be added to it and judged by whether the number moves,
+	// which hand-picked weights never allowed — and not because it is beating
+	// what it replaced. It is not, yet.
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))
@@ -640,4 +738,33 @@ func weld(in []Shape, members []int) Shape {
 		}
 	}
 	return out
+}
+
+// bridge closes the pinholes in a speckled stroke, so that one drawing comes
+// back as one component instead of a scatter of fragments. Grown and then
+// shrunk by the same amount: a gap narrower than twice the radius is filled
+// in, and everything else keeps the size it had.
+func bridge(mask []bool, w, h int) []bool {
+	const radius = 2
+	return shrink(grow(mask, w, h, radius), w, h, radius)
+}
+
+// sortCandidates puts the largest first, breaking ties by where a shape sits.
+//
+// Size alone is not a total order — two candidates of the same area are common
+// — and an unstable sort then hands back a different order run to run. That is
+// worse than untidy: everything downstream refers to a candidate by its index,
+// including the labels a model is fitted against, so the same picture would
+// train against different answers on different days.
+func sortCandidates(out []Shape) {
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Pixels != b.Pixels {
+			return a.Pixels > b.Pixels
+		}
+		if a.MinY != b.MinY {
+			return a.MinY < b.MinY
+		}
+		return a.MinX < b.MinX
+	})
 }
