@@ -64,7 +64,7 @@ type Point struct {
 // releases the left button where it lands.
 func Click(from, to Point) chromedp.ActionFunc {
 	return func(ctx context.Context) error {
-		if err := move(ctx, from, to); err != nil {
+		if err := move(ctx, from, to, false); err != nil {
 			return err
 		}
 
@@ -101,12 +101,69 @@ func Click(from, to Point) chromedp.ActionFunc {
 // fading in over the page behind it.
 func Move(from, to Point) chromedp.ActionFunc {
 	return func(ctx context.Context) error {
-		return move(ctx, from, to)
+		return move(ctx, from, to, false)
+	}
+}
+
+// Drag walks the pointer to start, presses the left button, carries it to end,
+// and releases it there.
+//
+// This is the shape a slider wants — hCaptcha's drag tasks, GeeTest's puzzle
+// piece — and the reason it is not a click with a move in the middle is that
+// the button state has to travel with every event along the way. A page
+// listening for dragging watches the moves, not the endpoints: a pointer that
+// presses, teleports, and releases has not dragged anything.
+//
+// from is where the pointer is now, so the approach to the handle is itself a
+// movement rather than a jump onto it.
+func Drag(from, start, end Point) chromedp.ActionFunc {
+	return func(ctx context.Context) error {
+		if err := move(ctx, from, start, false); err != nil {
+			return err
+		}
+
+		// Settling on the handle before taking hold of it.
+		if err := Pause(ctx, 70, 160); err != nil {
+			return err
+		}
+
+		press := input.DispatchMouseEvent(input.MousePressed, start.X, start.Y).
+			WithButton(input.Left).
+			WithClickCount(1)
+		if err := send(ctx, press); err != nil {
+			return err
+		}
+
+		// A hand does not start moving the instant it grips.
+		if err := Pause(ctx, 60, 130); err != nil {
+			return err
+		}
+
+		if err := move(ctx, start, end, true); err != nil {
+			return err
+		}
+
+		// And it does not let go the instant it stops, either. This pause is
+		// the one a slider is most likely to be watching: released at the same
+		// millisecond it arrives, the gesture has no landing.
+		if err := Pause(ctx, 90, 200); err != nil {
+			return err
+		}
+
+		release := input.DispatchMouseEvent(input.MouseReleased, end.X, end.Y).
+			WithButton(input.Left).
+			WithClickCount(1)
+		return send(ctx, release)
 	}
 }
 
 // move traces a curved, unevenly paced path between two points.
-func move(ctx context.Context, from, to Point) error {
+//
+// held says the left button is down for the whole path. It has to be carried
+// on every event: a mousemove that does not say which button is pressed is a
+// hover, and a page watching for a drag sees the pointer arrive without ever
+// having been dragged.
+func move(ctx context.Context, from, to Point, held bool) error {
 	distance := math.Hypot(to.X-from.X, to.Y-from.Y)
 
 	// Roughly one event per dozen pixels, clamped so that both a nudge and a
@@ -127,8 +184,20 @@ func move(ctx context.Context, from, to Point) error {
 			p.Y += (rand.Float64() - 0.5) * 1.4
 		}
 
-		if err := send(ctx, input.DispatchMouseEvent(input.MouseMoved, p.X, p.Y)); err != nil {
+		event := input.DispatchMouseEvent(input.MouseMoved, p.X, p.Y)
+		if held {
+			event = event.WithButton(input.Left).WithButtons(1)
+		}
+		if err := send(ctx, event); err != nil {
 			return err
+		}
+		// A dragged pointer is slower than a free one: the hand is holding
+		// something rather than travelling to it.
+		if held {
+			if err := Pause(ctx, 12, 34); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := Pause(ctx, 6, 20); err != nil {
 			return err
