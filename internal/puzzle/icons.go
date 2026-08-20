@@ -584,8 +584,9 @@ func mergeTouching(in []Shape) []Shape {
 	for i := range parent {
 		parent[i] = i
 	}
-	var find func(int) int
-	find = func(i int) int {
+	// Not recursive: it walks to the root and flattens as it goes, so the
+	// declaration does not need to be separate.
+	find := func(i int) int {
 		for parent[i] != i {
 			parent[i] = parent[parent[i]]
 			i = parent[i]
