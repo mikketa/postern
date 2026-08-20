@@ -40,22 +40,57 @@ func FindIcons(img image.Image, minPixels, want int) []Shape {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()
 
-	var hist [36]float64
+	// The background colour: the commonest colour in the picture, full stop.
+	//
+	// Weighting the vote by how colourful a pixel is looks sensible and
+	// inverts the whole result on a pale background. There the only saturated
+	// pixels in the picture ARE the icons, so they win the vote, the icons are
+	// taken for the background, and the pale scenery standing out from them is
+	// returned as the icons. Measured on collected challenges with a light
+	// grey backdrop: every candidate landed on the lettering and not one of
+	// the three icons was found.
+	//
+	// So every pixel votes, in a coarse three-dimensional histogram. A
+	// desaturated background is a colour like any other and wins on numbers,
+	// which is what being the background means.
+	const hueBins, satBins, valBins = 12, 4, 4
+	hist := make([]int, hueBins*satBins*valBins)
+	bucket := func(hue, sat, v float64) int {
+		hi := min(int(hue/360*hueBins), hueBins-1)
+		si := min(int(sat*satBins), satBins-1)
+		vi := min(int(v/256*valBins), valBins-1)
+		return (hi*satBins+si)*valBins + vi
+	}
 	for y := range h {
 		for x := range w {
-			hue, sat, v := hsv(img, b.Min.X+x, b.Min.Y+y)
-			if sat > 0.15 && v > 40 {
-				hist[int(hue/10)%36] += sat
-			}
+			hist[bucket(hsv(img, b.Min.X+x, b.Min.Y+y))]++
 		}
 	}
 	dom := 0
-	for i, v := range hist {
-		if v > hist[dom] {
+	for i, n := range hist {
+		if n > hist[dom] {
 			dom = i
 		}
 	}
-	domHue := float64(dom)*10 + 5
+	domHue := (float64(dom/(satBins*valBins)) + 0.5) * 360 / hueBins
+	domSat := (float64(dom/valBins%satBins) + 0.5) / satBins
+	domVal := (float64(dom%valBins) + 0.5) * 256 / valBins
+
+	// How far a colour is from the background, across all three axes.
+	//
+	// Hue alone loses icons outright: a cyan icon on a blue background is
+	// thirty degrees away and never clears a hue threshold, however much
+	// brighter and more saturated it plainly is. But hue also has to be
+	// discounted when either colour is close to grey, because the hue of a
+	// grey is arbitrary — that is what makes a pale background pick fights
+	// with everything.
+	apartFrom := func(hue, sat, v float64) float64 {
+		weight := math.Min(math.Min(sat, domSat)/0.4, 1)
+		dh := hueApart(hue, domHue) / 180 * weight
+		ds := math.Abs(sat - domSat)
+		dv := math.Abs(v-domVal) / 255
+		return math.Sqrt(dh*dh + 0.6*ds*ds + 0.3*dv*dv)
+	}
 
 	// Progressively looser thresholds, until there are at least as many
 	// candidates as the prompt asks for.
@@ -69,22 +104,29 @@ func FindIcons(img image.Image, minPixels, want int) []Shape {
 	// The strict pass still runs first, so challenges that separate cleanly
 	// are not made harder.
 	var out []Shape
-	for _, look := range []struct{ sat, value, away float64 }{
-		{0.35, 60, 60},
-		{0.28, 50, 45},
-		{0.22, 40, 32},
-		{0.15, 30, 22},
-		{0.10, 25, 15},
-	} {
+	// The scale is the colour distance above, so these start high: a threshold
+	// low enough to catch a cyan icon on a blue background also lets the
+	// background through, and the picture arrives as one blob. Strict first,
+	// loosening only while there are too few candidates.
+	for _, minApart := range []float64{0.62, 0.52, 0.44, 0.37, 0.31, 0.26, 0.21} {
 		mask := make([]bool, w*h)
 		for y := range h {
 			for x := range w {
-				hue, sat, v := hsv(img, b.Min.X+x, b.Min.Y+y)
-				mask[y*w+x] = sat > look.sat && v > look.value &&
-					hueApart(hue, domHue) > look.away
+				mask[y*w+x] = apartFrom(hsv(img, b.Min.X+x, b.Min.Y+y)) > minApart
 			}
 		}
-		got := dropLettering(mergeNested(components(mask, w, h, minPixels)))
+		raw := components(mask, w, h, minPixels)
+
+		// Welding the pieces of a drawing together is usually right — an icon
+		// is not always drawn in one stroke — but it can also weld an icon to
+		// its neighbour and leave too few candidates. So it is tried first and
+		// dropped when it costs more than it buys.
+		got := dropLettering(mergeNested(mergeTouching(raw)))
+		if len(got) < want {
+			if loose := dropLettering(mergeNested(raw)); len(loose) > len(got) {
+				got = loose
+			}
+		}
 		if len(got) > len(out) {
 			out = got
 		}
@@ -273,15 +315,19 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 			"the picture yielded %d", len(wanted), len(found))
 	}
 
-	// Every pictogram against every candidate, scored on how much the two
-	// silhouettes coincide once filled, resized and turned into alignment.
-	// Invariant moments were tried first and were too coarse to separate a
-	// redrawn icon from a letter of the vendor's own logo.
+	// Every pictogram against every candidate, scored by the trained model.
+	//
+	// Silhouette overlap alone was the previous rule and it is still the
+	// single most useful measurement — it carries the largest weight — but it
+	// is one of twelve, and what each is worth was fitted to challenges whose
+	// answers are known rather than guessed at. Hand-picked weights are how
+	// this got stuck: every adjustment traded one challenge for another.
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))
 		for j := range found {
-			cost[i][j] = 1 - Resembles(wanted[i], found[j])
+			// Negated: the search below minimises.
+			cost[i][j] = -trained.dot(Features(wanted[i], found[j], found))
 		}
 	}
 
@@ -334,7 +380,7 @@ func PairIcons(wanted, found []Shape) (Pairing, error) {
 
 	var mean float64
 	for i, j := range best {
-		mean += 1 - cost[i][j]
+		mean += sigmoid(-cost[i][j])
 	}
 	mean /= float64(len(best))
 
@@ -517,4 +563,99 @@ func Drawn(s Shape) float64 {
 
 	sparse := 1 - math.Min(density/0.55, 1)
 	return math.Min(0.5*sparse+0.5*math.Min(wander/0.8, 1), 1)
+}
+
+// mergeTouching joins candidates that are parts of one drawing.
+//
+// An icon is not always drawn in one piece: a pause symbol is two bars, a
+// figure can have a detached head. Segmentation returns each piece separately,
+// so the icon occupies several of the places available and none of the pieces
+// looks like the pictogram being asked for.
+//
+// Only near neighbours are joined, and only when the result stays icon-sized —
+// otherwise a background busy with colour would collapse into one blob, which
+// is the failure mode at the other end of this.
+func mergeTouching(in []Shape) []Shape {
+	const gap = 9       // pixels apart, at most
+	const biggest = 110 // the joined box may not exceed this
+
+	// Union-find over the candidates.
+	parent := make([]int, len(in))
+	for i := range parent {
+		parent[i] = i
+	}
+	var find func(int) int
+	find = func(i int) int {
+		for parent[i] != i {
+			parent[i] = parent[parent[i]]
+			i = parent[i]
+		}
+		return i
+	}
+
+	near := func(a, b Shape) bool {
+		dx := max(0, max(a.MinX-(b.MinX+b.W), b.MinX-(a.MinX+a.W)))
+		dy := max(0, max(a.MinY-(b.MinY+b.H), b.MinY-(a.MinY+a.H)))
+		if dx > gap || dy > gap {
+			return false
+		}
+		w := max(a.MinX+a.W, b.MinX+b.W) - min(a.MinX, b.MinX)
+		h := max(a.MinY+a.H, b.MinY+b.H) - min(a.MinY, b.MinY)
+		return w <= biggest && h <= biggest
+	}
+
+	for i := range in {
+		for j := i + 1; j < len(in); j++ {
+			if near(in[i], in[j]) {
+				if ri, rj := find(i), find(j); ri != rj {
+					parent[ri] = rj
+				}
+			}
+		}
+	}
+
+	groups := map[int][]int{}
+	for i := range in {
+		r := find(i)
+		groups[r] = append(groups[r], i)
+	}
+
+	out := in[:0:0]
+	for _, members := range groups {
+		if len(members) == 1 {
+			out = append(out, in[members[0]])
+			continue
+		}
+		out = append(out, weld(in, members))
+	}
+	return out
+}
+
+// weld builds one shape from several, on a canvas covering them all.
+func weld(in []Shape, members []int) Shape {
+	minX, minY, maxX, maxY := 1<<30, 1<<30, -1, -1
+	for _, i := range members {
+		s := in[i]
+		minX, minY = min(minX, s.MinX), min(minY, s.MinY)
+		maxX = max(maxX, s.MinX+s.W-1)
+		maxY = max(maxY, s.MinY+s.H-1)
+	}
+	w, h := maxX-minX+1, maxY-minY+1
+	out := Shape{Mask: make([]bool, w*h), W: w, H: h,
+		MinX: minX, MinY: minY,
+		CentreX: (minX + maxX) / 2, CentreY: (minY + maxY) / 2,
+		sourceW: in[members[0]].sourceW}
+	for _, i := range members {
+		s := in[i]
+		for y := range s.H {
+			for x := range s.W {
+				if !s.Mask[y*s.W+x] {
+					continue
+				}
+				out.Mask[(s.MinY+y-minY)*w+(s.MinX+x-minX)] = true
+				out.Pixels++
+			}
+		}
+	}
+	return out
 }

@@ -64,43 +64,41 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved.
 //
-// It is solved sometimes, which is not the same thing: 5 attempts out of 30,
-// across six measured runs of five (0, 2, 1, 0, 1, 1). About a sixth, with no
-// trend — the differences between those runs are noise.
+// Seven measured runs of five: 0, 2, 1, 0, 1, 1, 0. Around a sixth, with no
+// trend across them.
 //
-// The parts around the recognition were each fixed against a bench of twelve
-// collected challenges. Every fix was real, verified on all twelve, and not
-// one of them moved the live number.
+// The recognition is now a fitted model rather than hand-picked weights —
+// twelve measurements of a pictogram against a candidate, a logistic fit over
+// them, trained on challenges whose answers were read off by eye. See
+// internal/puzzle/train_test.go for how to collect a bench and refit. It ranks
+// the right candidate first 56% of the time against 51% for silhouette
+// overlap alone, cross-validated by challenge over 43 labelled pictograms.
 //
-// Segmentation found fewer icons than the prompt asked for on five of the
-// twelve, which no later stage recovers from; it now loosens until it has
-// enough. Outlined icons segmented twice, as a border and as what the border
-// encloses, taking two of the three places available; nested candidates are
-// merged. The vendor's name segments as readily as an icon and is filtered
-// back out. And the prompt itself was split on empty columns, which counted
-// three pictograms on only eight of the twelve — once one, once four — so the
-// wrong number of icons was clicked before recognition even began; it is now
-// cut by the strip's geometry, and counts three on all twelve.
+// 56% per pictogram is about a sixth per challenge, because a challenge is
+// three pictograms and all three have to be right. That is the arithmetic of
+// where this sits, and it is why the live number has not moved: every fix
+// around the recognition was real and none of them changes it.
 //
-// What is left is the recognition itself, and it is the whole difficulty. The
-// icons are redrawn rather than copied — thickened, recoloured, textured,
-// turned — and they are hidden among scenery that is deliberately icon-like:
-// lettering cut from card, photographed objects in strong colour. Telling one
-// from the other is what a trained classifier does. Comparing silhouettes gets
-// a sixth of them, which is well above chance and nowhere near reliable.
+// Everything around the recognition has been fixed against that bench, and
+// each fix is verified there. Segmentation found fewer icons than the prompt
+// asked for on five of twelve, which no later stage recovers from — it now
+// loosens until it has enough. The background colour was taken as the
+// commonest saturated hue, which inverts the whole result on a pale
+// background: there the only saturated pixels ARE the icons, so they were
+// read as the background and the scenery was returned as the icons. Outlined
+// icons segmented twice, as a border and as what it encloses. An icon drawn in
+// separate pieces segmented as several. The vendor's name segments as readily
+// as an icon. And the prompt was split on empty columns, which counted three
+// pictograms on only eight of twelve.
 //
-// Everything around the recognition works. The picture segments into
-// candidates, the vendor's name is filtered back out of them — its letters
-// segment as well as icons do, and sit on a line at a steady pitch, which is
-// what gives them away — and the prompt splits into exactly the right
-// pictograms. What is left is telling a redrawn icon from a piece of scenery,
-// and the icons are redrawn rather than copied: thickened, recoloured,
-// textured, turned. The vendor serves them from a path named for the network
-// that generates them, which is the whole point of them.
+// What is left is the recognition itself. These icons are redrawn rather than
+// copied — thickened, recoloured, textured, turned — and hidden among scenery
+// chosen to resemble them: lettering cut from card, photographed objects in
+// strong colour. Twelve geometric measurements and 43 labelled examples get to
+// 56%. Closing the rest needs the same machinery with far more data, or a
+// model that learns its own features rather than being handed them.
 //
-// Getting from a third to reliable is not a matter of tuning this further; it
-// needs something that can recognise a drawing. Skipped rather than left
-// failing, because a test that always fails stops being read.
+// Skipped rather than left failing: a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
 	t.Skip("solved about a sixth of the time: see the comment above")
 	solves(t, "Icon CAPTCHA", SolveIcon)
