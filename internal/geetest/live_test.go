@@ -64,10 +64,11 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved.
 //
-// It is solved sometimes, which is not the same thing. Three measured runs of
-// five: 0 with invariant moments, then 2 and 1 once those were replaced by
-// comparing the silhouettes themselves. Somewhere around a third, and the gap
-// between 1 and 2 out of 5 is noise rather than progress.
+// It is solved sometimes, which is not the same thing. Four measured runs of
+// five: 0 with invariant moments; 2 then 1 once those were replaced by
+// comparing the silhouettes themselves; 0 again when the solver was allowed
+// to refresh past pictures it judged unreadable. Somewhere around a fifth to
+// a third, with no trend — the differences between those runs are noise.
 //
 // Everything around the recognition works. The picture segments into
 // candidates, the vendor's name is filtered back out of them — its letters
@@ -82,7 +83,7 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // needs something that can recognise a drawing. Skipped rather than left
 // failing, because a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
-	t.Skip("solved about a third of the time: see the comment above")
+	t.Skip("solved unreliably: around a fifth to a third, see the comment above")
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 

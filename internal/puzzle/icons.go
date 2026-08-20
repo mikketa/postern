@@ -211,19 +211,39 @@ func FindPictograms(img image.Image, minValue float64) []Shape {
 	return out
 }
 
+// Pairing is an answer, with how much it should be trusted.
+//
+// The confidence is the point of it. Recognising these icons works about a
+// third of the time, and a solver that clicks regardless is wrong twice for
+// every time it is right. A solver that knows when it is guessing can ask for
+// a different picture instead — which is what the widget's refresh button is
+// for, and what a person does when they cannot make out the drawing.
+type Pairing struct {
+	// Order[i] is the icon answering pictogram i.
+	Order []int
+
+	// Mean is the average resemblance of the chosen arrangement.
+	Mean float64
+
+	// Margin is how much better this arrangement scored than the next best.
+	// A picture where two arrangements score alike is a picture that has not
+	// been understood, however good the winner looks on its own.
+	Margin float64
+}
+
 // PairIcons says which icon answers each pictogram, in the order asked.
 //
 // Every assignment is scored and the best one wins: the boards are small — a
 // handful of each — so this is enumerated rather than optimised, and the
 // answer is the best whole arrangement rather than a series of independent
 // best guesses that can claim the same icon twice.
-func PairIcons(wanted, found []Shape) ([]int, error) {
+func PairIcons(wanted, found []Shape) (Pairing, error) {
 	if len(wanted) == 0 {
-		return nil, fmt.Errorf("puzzle: the prompt asks for nothing")
+		return Pairing{}, fmt.Errorf("puzzle: the prompt asks for nothing")
 	}
 	if len(found) < len(wanted) {
-		return nil, fmt.Errorf("puzzle: the prompt asks for %d icons and the "+
-			"picture yielded %d", len(wanted), len(found))
+		return Pairing{}, fmt.Errorf("puzzle: the prompt asks for %d icons and "+
+			"the picture yielded %d", len(wanted), len(found))
 	}
 
 	// Every pictogram against every candidate, scored on how much the two
@@ -238,7 +258,7 @@ func PairIcons(wanted, found []Shape) ([]int, error) {
 		}
 	}
 
-	best, bestScore := []int(nil), math.Inf(1)
+	best, bestScore, runnerUp := []int(nil), math.Inf(1), math.Inf(1)
 	used := make([]bool, len(found))
 	cur := make([]int, 0, len(wanted))
 	var walk func()
@@ -254,9 +274,12 @@ func PairIcons(wanted, found []Shape) ([]int, error) {
 			// independently. An arrangement that mixes a large shape with a
 			// small one is usually picking up scenery.
 			sc += spread(found, cur)
-			if sc < bestScore {
-				bestScore = sc
+			switch {
+			case sc < bestScore:
+				bestScore, runnerUp = sc, bestScore
 				best = append([]int(nil), cur...)
+			case sc < runnerUp:
+				runnerUp = sc
 			}
 			return
 		}
@@ -273,9 +296,20 @@ func PairIcons(wanted, found []Shape) ([]int, error) {
 	}
 	walk()
 	if best == nil {
-		return nil, fmt.Errorf("puzzle: no arrangement of icons could be scored")
+		return Pairing{}, fmt.Errorf("puzzle: no arrangement of icons could be scored")
 	}
-	return best, nil
+
+	var mean float64
+	for i, j := range best {
+		mean += 1 - cost[i][j]
+	}
+	mean /= float64(len(best))
+
+	margin := 0.0
+	if !math.IsInf(runnerUp, 1) {
+		margin = runnerUp - bestScore
+	}
+	return Pairing{Order: best, Mean: mean, Margin: margin}, nil
 }
 
 // components extracts connected regions of a mask, four-way.

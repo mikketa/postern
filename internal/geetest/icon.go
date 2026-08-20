@@ -26,6 +26,15 @@ const readIcon = `(() => {
 })()`
 
 // SolveIcon clicks the icons the prompt asks for, in the order it asks.
+//
+// It answers whatever picture it is given. Refreshing until a picture looked
+// readable was tried — the widget's refresh button is an ordinary control, and
+// a person who cannot make out a drawing does ask for another — but selecting
+// on confidence needs a confidence worth the name, and this one was calibrated
+// against two captured challenges, only one of which had a known answer. It
+// measured 0/5 while tripling the requests made of the vendor, so it is gone.
+// The confidence is still reported by PairIcons, for a caller that has the
+// data to calibrate it.
 func SolveIcon(ctx context.Context) error {
 	var w struct {
 		Bg     *Box `json:"bg"`
@@ -52,14 +61,15 @@ func SolveIcon(ctx context.Context) error {
 	// stray colour these backgrounds carry.
 	found := puzzle.FindIcons(picture, 200)
 	wanted := puzzle.FindPictograms(prompt, 140)
-	order, err := puzzle.PairIcons(wanted, found)
+	pairing, err := puzzle.PairIcons(wanted, found)
 	if err != nil {
 		return fmt.Errorf("geetest: %w", err)
 	}
 
-	for _, j := range order {
+	for _, j := range pairing.Order {
 		icon := found[j]
-		if err := Click(ctx, w.Bg.X+float64(icon.CentreX), w.Bg.Y+float64(icon.CentreY)); err != nil {
+		if err := Click(ctx, w.Bg.X+float64(icon.CentreX),
+			w.Bg.Y+float64(icon.CentreY)); err != nil {
 			return err
 		}
 		time.Sleep(time.Duration(300+rand.IntN(350)) * time.Millisecond)
