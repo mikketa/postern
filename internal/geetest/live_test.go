@@ -43,19 +43,46 @@ func runs(t *testing.T) int {
 }
 
 func TestTheFiveInARowChallengeIsSolved(t *testing.T) {
-	solves(t, "Gobang CAPTCHA", func(b Board) (puzzle.Move, error) {
+	solves(t, "Gobang CAPTCHA", playBoard(func(b Board) (puzzle.Move, error) {
 		return puzzle.SolveLine(b.Cells, 5)
-	})
+	}))
 }
 
 func TestTheMatchThreeChallengeIsSolved(t *testing.T) {
-	solves(t, "IconCrush CAPTCHA", func(b Board) (puzzle.Move, error) {
+	solves(t, "IconCrush CAPTCHA", playBoard(func(b Board) (puzzle.Move, error) {
 		return puzzle.SolveSwap(b.Cells, 3)
-	})
+	}))
+}
+
+func TestTheSliderChallengeIsSolved(t *testing.T) {
+	solves(t, "Slide CAPTCHA", SolveSlider)
+}
+
+// TestTheNoCaptchaChallengePasses covers the type that asks for nothing: the
+// widget decides on its own and the button is the whole interaction. Worth a
+// test anyway — it is the path where a solver has to recognise there is
+// nothing to solve, rather than wait for a challenge that is never coming.
+func TestTheNoCaptchaChallengePasses(t *testing.T) {
+	solves(t, "No CAPTCHA", func(context.Context) error { return nil })
+}
+
+// playBoard reads the board, solves it and plays the move back.
+func playBoard(solve func(Board) (puzzle.Move, error)) func(context.Context) error {
+	return func(ctx context.Context) error {
+		b, err := ReadBoard(ctx)
+		if err != nil {
+			return err
+		}
+		m, err := solve(b)
+		if err != nil {
+			return err
+		}
+		return Play(ctx, b, m)
+	}
 }
 
 // solves runs one challenge type end to end, several times over.
-func solves(t *testing.T, tab string, solve func(Board) (puzzle.Move, error)) {
+func solves(t *testing.T, tab string, play func(context.Context) error) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("drives a real browser against a vendor's demo")
@@ -70,7 +97,7 @@ func solves(t *testing.T, tab string, solve func(Board) (puzzle.Move, error)) {
 	n := runs(t)
 	ok := 0
 	for i := 1; i <= n; i++ {
-		if attempt(t, i, tab, solve) {
+		if attempt(t, i, tab, play) {
 			ok++
 		}
 		if i < n {
@@ -83,7 +110,7 @@ func solves(t *testing.T, tab string, solve func(Board) (puzzle.Move, error)) {
 	}
 }
 
-func attempt(t *testing.T, i int, tab string, solve func(Board) (puzzle.Move, error)) bool {
+func attempt(t *testing.T, i int, tab string, play func(context.Context) error) bool {
 	t.Helper()
 
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
@@ -121,18 +148,8 @@ func attempt(t *testing.T, i int, tab string, solve func(Board) (puzzle.Move, er
 	}
 	chromedp.Run(ctx, chromedp.Sleep(7*time.Second))
 
-	b, err := ReadBoard(ctx)
-	if err != nil {
+	if err := play(ctx); err != nil {
 		t.Logf("attempt %d: %v", i, err)
-		return false
-	}
-	m, err := solve(b)
-	if err != nil {
-		t.Logf("attempt %d: %v", i, err)
-		return false
-	}
-	if err := Play(ctx, b, m); err != nil {
-		t.Logf("attempt %d: playing %s: %v", i, m, err)
 		return false
 	}
 	chromedp.Run(ctx, chromedp.Sleep(3*time.Second))
@@ -143,7 +160,7 @@ func attempt(t *testing.T, i int, tab string, solve func(Board) (puzzle.Move, er
 
 	won, said := verdict(ctx)
 	if !won {
-		t.Logf("attempt %d: played %s and the widget said %q", i, m, said)
+		t.Logf("attempt %d: the widget said %q", i, said)
 	}
 	return won
 }
