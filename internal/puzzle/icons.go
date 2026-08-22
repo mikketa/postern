@@ -401,6 +401,14 @@ type Pairing struct {
 
 // PairIcons says which icon answers each pictogram, in the order asked.
 //
+// The score is the fitted model's and nothing else. An arrangement whose icons
+// were not sized alike used to be penalised on top, on the reasoning that one
+// challenge's icons are drawn at one scale while the scenery around them is
+// sized independently — which is true, and measured neutral: 21 whole
+// arrangements right out of 32 with the penalty and without it. A hand-picked
+// constant that never moves the number is the thing this work set out to
+// remove, so it is gone.
+//
 // Every assignment is scored and the best one wins: the boards are small — a
 // handful of each — so this is enumerated rather than optimised, and the
 // answer is the best whole arrangement rather than a series of independent
@@ -424,12 +432,13 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 
 	// Every pictogram against every candidate, scored by the fitted model.
 	//
-	// Silhouette overlap alone was the previous rule and on the collected
-	// challenges the two are level: 21 whole arrangements right out of 32
-	// either way. The fitted model is kept for the reason it was built — a
-	// measurement can be added to it and judged by whether the number moves,
+	// Silhouette overlap alone was the previous rule, and on the collected
+	// challenges the two cannot be told apart: the model gets 21 whole
+	// arrangements right out of 32, overlap alone 22, which at this sample
+	// size is the same number. The model is kept for the reason it was built —
+	// a measurement can be added to it and judged by whether the figure moves,
 	// which hand-picked weights never allowed — and not because it is beating
-	// what it replaced. It is not, yet.
+	// what it replaced. It is not, yet. See features.go for why.
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))
@@ -449,20 +458,6 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 			for i, j := range cur {
 				sc += cost[i][j]
 			}
-			// The icons of one challenge are drawn by one process at one
-			// scale — measured at 49x49, 49x50 and 50x51 on a challenge that
-			// solved — while the decorations they hide among are sized
-			// independently. An arrangement that mixes a large shape with a
-			// small one is usually picking up scenery.
-			//
-			// This is the one judgement left outside the model, because it is
-			// the one the model cannot make: it scores a whole arrangement,
-			// and every measurement handed to the model concerns a single
-			// pictogram against a single candidate. Whether a candidate looks
-			// drawn rather than solid used to be added here too, with a weight
-			// picked by hand; it is a property of one candidate, so it belongs
-			// in the vector and it is in it.
-			sc += spread(found, cur)
 			switch {
 			case sc < bestScore:
 				bestScore, runnerUp = sc, bestScore
@@ -592,25 +587,6 @@ func hsv(img image.Image, x, y int) (hue, sat, value float64) {
 func hueApart(a, b float64) float64 {
 	d := math.Abs(a - b)
 	return math.Min(d, 360-d)
-}
-
-// spread penalises an arrangement whose icons are not sized alike, in the same
-// units as the resemblance cost so the two can simply be added.
-func spread(found []Shape, pick []int) float64 {
-	if len(pick) < 2 {
-		return 0
-	}
-	smallest, largest := math.Inf(1), 0.0
-	for _, j := range pick {
-		d := math.Hypot(float64(found[j].W), float64(found[j].H))
-		smallest = math.Min(smallest, d)
-		largest = math.Max(largest, d)
-	}
-	if smallest <= 0 {
-		return 0
-	}
-	// 1.0 for shapes of equal size, rising with the ratio between them.
-	return 0.35 * (largest/smallest - 1)
 }
 
 // mergeNested collapses candidates that sit inside one another.
