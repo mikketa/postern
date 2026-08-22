@@ -430,11 +430,11 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 
 	// Every pictogram against every candidate, scored by the fitted model.
 	//
-	// Silhouette overlap alone was the previous rule: it gets 21 whole
-	// arrangements right out of 32 against the model's 24, and 0.652 of
-	// pictograms against 0.702. It took two measurements of a kind the vector
-	// did not have — the sweep reflected as well as turned, and the agreement
-	// sliced into rings rather than totalled — to get there; see features.go.
+	// Silhouette overlap alone was the previous rule: it gets 36 whole
+	// arrangements right out of 59 against the model's 43. It took two
+	// measurements of a kind the vector did not have — the sweep reflected as
+	// well as turned, and the agreement sliced into rings rather than totalled
+	// — to get there; see features.go.
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))

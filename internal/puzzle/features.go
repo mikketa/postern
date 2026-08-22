@@ -34,13 +34,20 @@ import "math"
 // to spill past the pictogram, a half-segmented icon tends to fall short, and
 // the total treats those as the same failure.
 //
-// Measured over 115 labelled pictograms, cross-validated by challenge:
+// Measured over 220 labelled pictograms from 88 collected challenges,
+// cross-validated by challenge:
 //
-//	silhouette overlap alone   0.652 per pictogram, 21 whole arrangements of 32
-//	the fitted model           0.702 per pictogram, 24 whole arrangements of 32
+//	silhouette overlap alone   0.664 per pictogram, 36 whole arrangements of 59
+//	the fitted model           0.679 per pictogram, 43 whole arrangements of 59
 //
-// Eight rings is where this stops paying: twelve is worse, at 0.665, because
-// there are 115 examples and not a thousand.
+// The gap is small per pictogram and large per challenge, which is the point:
+// a challenge needs all three right, so a rule that is a little better on each
+// one is a good deal better on the whole. Eight rings is where this stops
+// paying — twelve and sixteen are no better — and three other ideas were tried
+// against the same bench and dropped for moving nothing: wedges around the
+// centre as well as rings, the shape of the match across the whole sweep
+// rather than at its best angle, and sweeping a range of scales as well as
+// angles, which was worse.
 
 // FeatureCount is the length of a comparison vector.
 const FeatureCount = 23
