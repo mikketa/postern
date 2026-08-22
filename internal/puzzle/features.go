@@ -467,9 +467,11 @@ func ringAgreement(want, got []bool) [rings]float64 {
 	const n = normalSize
 	var both, either [rings]float64
 	c := float64(n-1) / 2
-	// The outermost ring reaches the corners, so the radius is scaled to the
-	// half-diagonal rather than the half-width.
-	maxR := math.Hypot(c, c)
+	// Scaled to the half-width, not the half-diagonal: a silhouette is fitted
+	// to the grid, so it fills the inscribed circle and barely reaches the
+	// corners. Scaling to the diagonal left the two outermost rings empty for
+	// every shape, which is two of eight measurements saying nothing.
+	maxR := c
 	for y := range n {
 		for x := range n {
 			i := y*n + x
@@ -487,6 +489,10 @@ func ringAgreement(want, got []bool) [rings]float64 {
 	for k := range out {
 		if either[k] > 0 {
 			out[k] = both[k] / either[k]
+		} else {
+			// Neither shape reaches this far. They agree about that, and
+			// reporting it as total disagreement is simply false.
+			out[k] = 1
 		}
 	}
 	return out

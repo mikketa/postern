@@ -5,29 +5,29 @@ package puzzle
 // trained is the fitted comparison model.
 var trained = Model{
 	Weights: [FeatureCount]float64{
-		+0.216167, // overlap.best
-		+0.104321, // overlap.upright
-		+0.120546, // overlap.margin
-		+0.183642, // density.diff
-		+0.035225, // elongation.diff
-		-0.043203, // holes.diff
-		+0.039865, // stroke.wander
-		-0.042216, // size.relative
-		-0.109894, // hu.distance
-		+0.054465, // compact.diff
-		+0.037169, // fill.ratio
-		-0.179054, // chamfer.best
-		-0.167836, // fit.excess
-		-0.098814, // fit.missing
-		-0.136764, // ring.0
-		-0.139413, // ring.1
-		-0.146750, // ring.2
-		+0.088236, // ring.3
-		+0.256009, // ring.4
-		+0.430575, // ring.5
-		+0.288526, // ring.6
-		+0.100189, // ring.7
-		+0.000000, // bias
+		+0.222439, // overlap.best
+		+0.101020, // overlap.upright
+		+0.150831, // overlap.margin
+		+0.184568, // density.diff
+		+0.043511, // elongation.diff
+		-0.060141, // holes.diff
+		+0.043502, // stroke.wander
+		-0.055637, // size.relative
+		-0.115396, // hu.distance
+		+0.055740, // compact.diff
+		+0.037940, // fill.ratio
+		-0.191122, // chamfer.best
+		-0.152641, // fit.excess
+		-0.113733, // fit.missing
+		-0.110034, // ring.0
+		-0.105342, // ring.1
+		-0.127591, // ring.2
+		-0.118140, // ring.3
+		+0.011526, // ring.4
+		+0.142157, // ring.5
+		+0.229346, // ring.6
+		+0.532775, // ring.7
+		-0.000000, // bias
 	},
 	Mean: [FeatureCount]float64{
 		+0.615411,
@@ -44,14 +44,14 @@ var trained = Model{
 		+0.540180,
 		+0.132283,
 		+0.252306,
-		+0.829812,
-		+0.816656,
-		+0.765422,
-		+0.692088,
-		+0.592963,
-		+0.413587,
-		+0.178886,
-		+0.039370,
+		+0.833723,
+		+0.827470,
+		+0.801875,
+		+0.763100,
+		+0.717641,
+		+0.652967,
+		+0.582775,
+		+0.380754,
 		+0.000000,
 	},
 	Scale: [FeatureCount]float64{
@@ -69,14 +69,14 @@ var trained = Model{
 		+0.424290,
 		+0.125208,
 		+0.208470,
-		+0.329258,
-		+0.278059,
-		+0.249747,
-		+0.241750,
-		+0.230659,
-		+0.193342,
-		+0.182696,
-		+0.113213,
+		+0.340794,
+		+0.301595,
+		+0.264786,
+		+0.252516,
+		+0.242289,
+		+0.241555,
+		+0.232327,
+		+0.179686,
 		+1.000000,
 	},
 }
