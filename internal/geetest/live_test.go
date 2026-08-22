@@ -62,45 +62,59 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // widget decides on its own and the button is the whole interaction. Worth a
 // test anyway — it is the path where a solver has to recognise there is
 // nothing to solve, rather than wait for a challenge that is never coming.
-// TestTheIconChallengeIsSolved is the one type that is not solved.
+// TestTheIconChallengeIsSolved is the one type that is not solved outright.
 //
-// Seven measured runs of five: 0, 2, 1, 0, 1, 1, 0. Around a sixth, with no
-// trend across them.
+// Measured: 3 of 5 and 2 of 5, so 5 of 10. It was 5 of 35 before this work —
+// seven series of five reading 0, 2, 1, 0, 1, 1, 0 — and what moved it was not
+// the recognition but the segmentation in front of it.
 //
-// The recognition is now a fitted model rather than hand-picked weights —
-// twelve measurements of a pictogram against a candidate, a logistic fit over
-// them, trained on challenges whose answers were read off by eye. See
-// internal/puzzle/train_test.go for how to collect a bench and refit. It ranks
-// the right candidate first 56% of the time against 51% for silhouette
-// overlap alone, cross-validated by challenge over 43 labelled pictograms.
+// The bench that says so is built from the vendor's own artwork. GeeTest draws
+// its icons over a small pool of reused photographs, so the per-pixel median
+// over the challenges sharing a photograph reconstructs it with every icon
+// removed, and subtracting that gives the icons exactly. That is a ground
+// truth, where before there was only a person looking at a screenshot and
+// deciding whether segmentation had done well — which it turns out is not a
+// reliable thing to ask a person. The first set of answers, read off by eye,
+// was wrong often enough that a model losing to plain silhouette overlap
+// looked like one beating it, and this comment said so.
 //
-// 56% per pictogram is about a sixth per challenge, because a challenge is
-// three pictograms and all three have to be right. That is the arithmetic of
-// where this sits, and it is why the live number has not moved: every fix
-// around the recognition was real and none of them changes it.
+// Against that truth, over 47 challenges and 135 drawn icons:
 //
-// Everything around the recognition has been fixed against that bench, and
-// each fix is verified there. Segmentation found fewer icons than the prompt
-// asked for on five of twelve, which no later stage recovers from — it now
-// loosens until it has enough. The background colour was taken as the
-// commonest saturated hue, which inverts the whole result on a pale
-// background: there the only saturated pixels ARE the icons, so they were
-// read as the background and the scenery was returned as the icons. Outlined
-// icons segmented twice, as a border and as what it encloses. An icon drawn in
-// separate pieces segmented as several. The vendor's name segments as readily
-// as an icon. And the prompt was split on empty columns, which counted three
-// pictograms on only eight of twelve.
+//	segmentation finds the icon        78/135 before, 115/135 now
+//	challenges yielding all three      12/47 before,  32/47 now
 //
-// What is left is the recognition itself. These icons are redrawn rather than
-// copied — thickened, recoloured, textured, turned — and hidden among scenery
-// chosen to resemble them: lettering cut from card, photographed objects in
-// strong colour. Twelve geometric measurements and 43 labelled examples get to
-// 56%. Closing the rest needs the same machinery with far more data, or a
-// model that learns its own features rather than being handed them.
+// What changed is the question segmentation asks. It used to take the
+// commonest colour for the background and call anything far from it an icon,
+// which does not survive a photograph: a collage of pink card, orange
+// lettering and a blue gamepad is as far from its own commonest colour as
+// anything drawn on it, and every candidate came back scenery. Whatever the
+// palette, a photograph's colours recur across the frame while an icon is
+// drawn once, in one colour, in one small patch. Two other defects fell out of
+// having a truth to measure against: a flood fill that leaked through the
+// pinholes in a speckled stroke and so filled nothing, and an unstable sort
+// that handed back a different candidate order run to run.
+//
+// What is left is the matching, and its ceiling is now measurable too. Run
+// against a bench with the scenery painted out — segmentation effectively
+// perfect, 128 of 133 icons found — it gets the whole arrangement right 24
+// times out of 39. So around three fifths of challenges is what this matcher
+// can do at best, and 32 of 47 complete segmentations times that is about what
+// the live figure shows.
+//
+// The recognition is a fitted model: twelve measurements of a pictogram
+// against a candidate, ranked within the pictogram, fitted to those answers.
+// See internal/puzzle/train_test.go to collect a bench and refit. Its honest
+// worth, cross-validated by challenge over 115 labelled pictograms: 0.650
+// against 0.661 for silhouette overlap alone, and 21 whole arrangements out of
+// 32 against 22. It does not beat the one measurement it was built to improve
+// on, and internal/puzzle/features.go records why: every other measurement in
+// the vector lands within noise of picking at random, so the twelve carry one
+// piece of information between them. Beating it needs a different kind of
+// information, not a better fit.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
-	t.Skip("solved about a sixth of the time: see the comment above")
+	t.Skip("solved about half the time: see the comment above")
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 
