@@ -192,7 +192,7 @@ func TestTrainIconModel(t *testing.T) {
 		if len(test) == 0 || len(train) == 0 {
 			continue
 		}
-		m, err := Train(train, 400, 0.05, 0.01)
+		m, err := Train(train, 400, 0.05, 0.3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -309,7 +309,7 @@ func TestTrainIconModel(t *testing.T) {
 		}
 	}
 
-	final, err := Train(groups, 600, 0.05, 0.01)
+	final, err := Train(groups, 600, 0.05, 0.3)
 	if err != nil {
 		t.Fatal(err)
 	}

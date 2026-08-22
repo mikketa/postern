@@ -94,23 +94,24 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // pinholes in a speckled stroke and so filled nothing, and an unstable sort
 // that handed back a different candidate order run to run.
 //
-// What is left is the matching, and its ceiling is now measurable too. Run
-// against a bench with the scenery painted out — segmentation effectively
-// perfect, 128 of 133 icons found — it gets the whole arrangement right 24
-// times out of 39. So around three fifths of challenges is what this matcher
-// can do at best, and 32 of 47 complete segmentations times that is about what
-// the live figure shows.
+// The matching has a ceiling of its own, and it is measurable the same way.
+// Run against a bench with the scenery painted out — segmentation effectively
+// perfect, 128 of 133 icons found — it got the whole arrangement right 24
+// times out of 39, so three fifths of challenges was all it could do however
+// well the segmentation fed it.
 //
-// The recognition is a fitted model: twelve measurements of a pictogram
-// against a candidate, ranked within the pictogram, fitted to those answers.
-// See internal/puzzle/train_test.go to collect a bench and refit. Its honest
-// worth, cross-validated by challenge over 115 labelled pictograms: 0.650
-// against 0.661 for silhouette overlap alone, and 21 whole arrangements out of
-// 32 against 22. It does not beat the one measurement it was built to improve
-// on, and internal/puzzle/features.go records why: every other measurement in
-// the vector lands within noise of picking at random, so the twelve carry one
-// piece of information between them. Beating it needs a different kind of
-// information, not a better fit.
+// The recognition is a fitted model: measurements of a pictogram against a
+// candidate, ranked within the pictogram, fitted to the answers above. See
+// internal/puzzle/train_test.go to collect a bench and refit. For a while it
+// was worth nothing — 0.650 of pictograms against 0.661 for plain silhouette
+// overlap — because eleven of its twelve columns were noise and no fit over
+// one useful column and eleven noisy ones beats the useful column. What it
+// needed was not a better fit but measurements of a different kind: the
+// rotation sweep reflected as well as turned, and the agreement sliced into
+// rings out from the centre instead of totalled. Cross-validated by challenge
+// over 115 labelled pictograms it now ranks 0.702 of pictograms right against
+// 0.652, and gets 24 whole arrangements of 32 against 21. features.go carries
+// the detail.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {

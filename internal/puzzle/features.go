@@ -9,30 +9,52 @@ import "math"
 // Hand-picked weights were tried and they are how this got stuck: every
 // adjustment traded one challenge for another.
 //
-// What the vector is worth, measured over 115 labelled pictograms: not much
-// beyond its first column. Ranking by silhouette overlap alone picks the right
-// candidate 0.661 of the time; by chamfer distance alone, also 0.661; the
-// fitted model, cross-validated by challenge, 0.650, and the two agree on the
-// whole arrangement 21 challenges out of 32. Every other measurement here —
-// how sparse a shape is, how many gaps it encloses, how elongated, how much of
-// it is edge — lands within noise of picking at random, which is 0.28.
+// The vector went through a stage where it was worth nothing. Twelve
+// measurements — how sparse a shape is, how elongated, how many gaps it
+// encloses, how much of it is edge — and every one of them but the overlap
+// landed within noise of picking at random, which with these candidate counts
+// is 0.28. A fit over one useful column and eleven noisy ones cannot beat the
+// useful column, and it did not: 0.650 against 0.661.
 //
-// That is worth stating plainly rather than leaving to be rediscovered: these
-// twelve measurements carry one piece of information between them, which is
-// how well two silhouettes agree, and no fit over them will beat measuring
-// that agreement well. The vector and the fitting stay because they are how
-// the next measurement gets judged — added, refitted, and kept only if the
-// number moves.
+// What was missing was not a better fit but a different kind of measurement,
+// and there were two.
+//
+// The sweep only ever turned the candidate. Reflecting it as well is worth
+// more on its own than the whole upright sweep — 0.687 against 0.661 — whether
+// because the vendor mirrors a glyph or simply because it is a second chance
+// at an alignment.
+//
+// And a single overlap figure says how much two shapes agree while saying
+// nothing about where. Sliced into eight rings out from the centre, the third
+// ring alone ranks candidates as well as the entire overlap did, and the eight
+// together say something the total cannot: a glyph and a candidate can agree
+// on their outline and disagree completely about what is inside it, which is
+// how a solid blob passes for a drawn ring. Splitting the disagreement into
+// what the candidate adds and what it misses is the same idea — scenery tends
+// to spill past the pictogram, a half-segmented icon tends to fall short, and
+// the total treats those as the same failure.
+//
+// Measured over 115 labelled pictograms, cross-validated by challenge:
+//
+//	silhouette overlap alone   0.652 per pictogram, 21 whole arrangements of 32
+//	the fitted model           0.702 per pictogram, 24 whole arrangements of 32
+//
+// Eight rings is where this stops paying: twelve is worse, at 0.665, because
+// there are 115 examples and not a thousand.
 
 // FeatureCount is the length of a comparison vector.
-const FeatureCount = 13
+const FeatureCount = 23
 
 // FeatureNames label the vector, for reading a trained model back.
 var FeatureNames = [FeatureCount]string{
 	"overlap.best", "overlap.upright", "overlap.margin",
 	"density.diff", "elongation.diff", "holes.diff",
 	"stroke.wander", "size.relative", "hu.distance",
-	"compact.diff", "fill.ratio", "chamfer.best", "bias",
+	"compact.diff", "fill.ratio", "chamfer.best",
+	"fit.excess", "fit.missing",
+	"ring.0", "ring.1", "ring.2", "ring.3",
+	"ring.4", "ring.5", "ring.6", "ring.7",
+	"bias",
 }
 
 // Features compares one pictogram against one candidate.
@@ -59,14 +81,25 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 	// to decide.
 	dw := distances(nw)
 	chamfer := math.Inf(1)
-	for i := range rotations {
-		ng := normalise(rotate(gf, float64(i)*2*math.Pi/rotations))
+	var aligned []bool
+	// Turned through a full circle, and again reflected. Nothing said the
+	// vendor only rotates its icons, and the reflected half of the sweep is
+	// worth more than the upright half on its own: 0.687 of pictograms ranked
+	// right against 0.661, measured over 115 labelled ones. Whether that is
+	// the vendor mirroring a glyph or simply a second chance at an alignment
+	// does not matter to a comparison that takes the best fit it can find.
+	for i := range 2 * rotations {
+		ng := normalise(rotate(gf, float64(i%rotations)*2*math.Pi/rotations))
+		if i >= rotations {
+			ng = flip(ng)
+		}
 		s := jaccard(nw, ng)
 		if i == 0 {
 			upright = s
 		}
 		if s > best {
 			second, best = best, s
+			aligned = ng
 		} else if s > second {
 			second = s
 		}
@@ -110,7 +143,26 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 		f[10] = float64(got.Pixels) / float64(gf.Pixels)
 	}
 	f[11] = chamfer
-	f[12] = 1 // bias
+
+	// One overlap figure hides which way a candidate is wrong. A shape that
+	// covers the pictogram and spills past it fails differently from one that
+	// sits inside and leaves half of it bare, and the two are worth different
+	// amounts: scenery tends to spill, a partly-segmented icon tends to fall
+	// short. Jaccard is one minus their sum, so the split is what is new here,
+	// not the total.
+	//
+	// And where the two agree matters as much as how much. Measured in rings
+	// out from the centre, so it survives the turning: a glyph and a candidate
+	// can agree on their outline and disagree entirely about what is inside
+	// it, which is exactly how a solid blob passes for a drawn ring.
+	if aligned != nil {
+		f[12], f[13] = fitError(nw, aligned)
+		r := ringAgreement(nw, aligned)
+		for i, v := range r {
+			f[14+i] = v
+		}
+	}
+	f[22] = 1 // bias
 
 	return f
 }
@@ -370,4 +422,72 @@ func chamferBoth(a []bool, da []float64, b []bool) float64 {
 		return float64(normalSize)
 	}
 	return 0.5 * (sa/na + sb/nb)
+}
+
+// flip reflects a normalised silhouette left to right.
+func flip(m []bool) []bool {
+	const n = normalSize
+	out := make([]bool, n*n)
+	for y := range n {
+		for x := range n {
+			out[y*n+(n-1-x)] = m[y*n+x]
+		}
+	}
+	return out
+}
+
+// rings is how finely the agreement is sliced from the centre outwards.
+const rings = 8
+
+// fitError splits disagreement into what the candidate adds and what it
+// misses, both as a share of the two together.
+func fitError(want, got []bool) (excess, missing float64) {
+	var e, m, either float64
+	for i := range want {
+		switch {
+		case want[i] && got[i]:
+			either++
+		case got[i]:
+			e++
+			either++
+		case want[i]:
+			m++
+			either++
+		}
+	}
+	if either == 0 {
+		return 0, 0
+	}
+	return e / either, m / either
+}
+
+// ringAgreement is the overlap measured separately in four rings out from the
+// centre of the grid.
+func ringAgreement(want, got []bool) [rings]float64 {
+	const n = normalSize
+	var both, either [rings]float64
+	c := float64(n-1) / 2
+	// The outermost ring reaches the corners, so the radius is scaled to the
+	// half-diagonal rather than the half-width.
+	maxR := math.Hypot(c, c)
+	for y := range n {
+		for x := range n {
+			i := y*n + x
+			if !want[i] && !got[i] {
+				continue
+			}
+			k := min(int(math.Hypot(float64(x)-c, float64(y)-c)/maxR*rings), rings-1)
+			either[k]++
+			if want[i] && got[i] {
+				both[k]++
+			}
+		}
+	}
+	var out [rings]float64
+	for k := range out {
+		if either[k] > 0 {
+			out[k] = both[k] / either[k]
+		}
+	}
+	return out
 }

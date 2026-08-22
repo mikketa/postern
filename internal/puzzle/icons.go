@@ -402,12 +402,10 @@ type Pairing struct {
 // PairIcons says which icon answers each pictogram, in the order asked.
 //
 // The score is the fitted model's and nothing else. An arrangement whose icons
-// were not sized alike used to be penalised on top, on the reasoning that one
-// challenge's icons are drawn at one scale while the scenery around them is
-// sized independently — which is true, and measured neutral: 21 whole
-// arrangements right out of 32 with the penalty and without it. A hand-picked
-// constant that never moves the number is the thing this work set out to
-// remove, so it is gone.
+// were not sized alike used to be penalised on top, on reasoning that is true
+// — one challenge's icons are drawn at one scale while the scenery around them
+// is not — and on a weight nobody had measured. Measured, it moved nothing. A
+// constant that never moves the figure is what this work set out to remove.
 //
 // Every assignment is scored and the best one wins: the boards are small — a
 // handful of each — so this is enumerated rather than optimised, and the
@@ -432,13 +430,11 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 
 	// Every pictogram against every candidate, scored by the fitted model.
 	//
-	// Silhouette overlap alone was the previous rule, and on the collected
-	// challenges the two cannot be told apart: the model gets 21 whole
-	// arrangements right out of 32, overlap alone 22, which at this sample
-	// size is the same number. The model is kept for the reason it was built —
-	// a measurement can be added to it and judged by whether the figure moves,
-	// which hand-picked weights never allowed — and not because it is beating
-	// what it replaced. It is not, yet. See features.go for why.
+	// Silhouette overlap alone was the previous rule: it gets 21 whole
+	// arrangements right out of 32 against the model's 24, and 0.652 of
+	// pictograms against 0.702. It took two measurements of a kind the vector
+	// did not have — the sweep reflected as well as turned, and the agreement
+	// sliced into rings rather than totalled — to get there; see features.go.
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))
