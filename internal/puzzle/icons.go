@@ -215,8 +215,10 @@ func clusterMask(img image.Image) []bool {
 	keep := make(map[int]bool, len(seen))
 	// A stroke's pixels do not all land in one bin — a hand-drawn line is
 	// shaded — so this floor is far below the size of an icon. It is here only
-	// to keep the picture's stray colours from each becoming a candidate.
-	const leastInABin = 40
+	// to keep the picture's stray colours from each becoming a candidate, and
+	// it is a share of the picture rather than a count so that it means the
+	// same thing if the widget is ever served larger.
+	leastInABin := max(24, int(area/1500))
 	for k, e := range seen {
 		if e.count < leastInABin || float64(e.count) > mostOfThePicture*area {
 			continue
