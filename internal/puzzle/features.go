@@ -4,18 +4,25 @@ import "math"
 
 // What a pairing is judged on.
 //
-// Comparing silhouettes by overlap gets an icon right about a sixth of the
-// time. The overlap is not wrong — it is one measurement among several, being
-// used alone. A shape that matches poorly on outline may match on how sparse
-// it is, how many gaps it encloses, how elongated it is; and a candidate that
-// is plainly scenery — a letter cut from card, a photographed object — gives
-// itself away on measurements that have nothing to do with the pictogram it is
-// being compared to.
-//
-// So every comparison is reduced to a vector, and what each part is worth is
-// learned from challenges whose answers are known rather than guessed at by
-// hand. Hand-picked weights were tried and they are how this got stuck: every
+// Every comparison is reduced to a vector, and what each part is worth is
+// fitted to challenges whose answers are known rather than guessed at by hand.
+// Hand-picked weights were tried and they are how this got stuck: every
 // adjustment traded one challenge for another.
+//
+// What the vector is worth, measured over 115 labelled pictograms: not much
+// beyond its first column. Ranking by silhouette overlap alone picks the right
+// candidate 0.661 of the time; by chamfer distance alone, also 0.661; the
+// fitted model, cross-validated by challenge, 0.650, and the two agree on the
+// whole arrangement 21 challenges out of 32. Every other measurement here —
+// how sparse a shape is, how many gaps it encloses, how elongated, how much of
+// it is edge — lands within noise of picking at random, which is 0.28.
+//
+// That is worth stating plainly rather than leaving to be rediscovered: these
+// twelve measurements carry one piece of information between them, which is
+// how well two silhouettes agree, and no fit over them will beat measuring
+// that agreement well. The vector and the fitting stay because they are how
+// the next measurement gets judged — added, refitted, and kept only if the
+// number moves.
 
 // FeatureCount is the length of a comparison vector.
 const FeatureCount = 13

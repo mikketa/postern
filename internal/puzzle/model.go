@@ -13,11 +13,19 @@ import (
 // Small enough to train in a few seconds and to ship as twelve numbers, which
 // matters — a model nobody can read or retrain is a model that rots.
 //
-// It is trained on challenges whose answers were established by looking at
-// them, and it replaces weights that were picked by hand. Hand-picking is how
-// this got stuck: every adjustment traded one challenge against another,
-// because a person tuning twelve interacting numbers is doing badly what
-// gradient descent does well.
+// It is fitted to challenges whose answers were established mechanically —
+// the vendor reuses its photographs, so the median over the challenges sharing
+// one reconstructs it with the drawn icons removed, and subtracting that gives
+// the icons exactly. Reading the answers off those cut-outs is reliable in a
+// way that reading them off a screenshot was not: the first label set, made by
+// eye, was wrong often enough to make a model that loses to silhouette overlap
+// look like one that beats it.
+//
+// It replaces weights that were picked by hand. Hand-picking is how this got
+// stuck: every adjustment traded one challenge against another, because a
+// person tuning twelve interacting numbers is doing badly what gradient
+// descent does well. See features.go for what the fit is currently worth,
+// which is honestly not much.
 
 // Model scores a comparison.
 //
