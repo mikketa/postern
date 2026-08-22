@@ -5,48 +5,48 @@ package puzzle
 // trained is the fitted comparison model.
 var trained = Model{
 	Weights: [FeatureCount]float64{
-		+0.335938, // overlap.best
-		+0.129604, // overlap.upright
-		+0.184510, // overlap.margin
-		+0.266174, // density.diff
-		-0.090611, // elongation.diff
-		-0.074799, // holes.diff
-		-0.053121, // stroke.wander
-		-0.005983, // size.relative
-		-0.217333, // hu.distance
-		-0.086371, // compact.diff
-		+0.072988, // fill.ratio
-		-0.297487, // chamfer.best
+		+1.522493, // overlap.best
+		+0.153729, // overlap.upright
+		+0.381213, // overlap.margin
+		+1.226149, // density.diff
+		+0.158379, // elongation.diff
+		-0.053577, // holes.diff
+		+0.419587, // stroke.wander
+		+0.177004, // size.relative
+		-0.166734, // hu.distance
+		+0.077173, // compact.diff
+		+0.968842, // fill.ratio
+		-0.288648, // chamfer.best
 		+0.000000, // bias
 	},
 	Mean: [FeatureCount]float64{
-		+0.582447,
-		+0.495921,
-		+0.011381,
-		+0.252128,
-		+0.289311,
-		+0.726937,
-		+0.329422,
+		+0.610792,
+		+0.528695,
+		+0.012372,
+		+0.245232,
+		+0.235684,
+		+0.607477,
+		+0.290585,
 		+1.000000,
-		+3.802580,
-		+6.226024,
-		+0.758313,
-		+0.616886,
+		+4.213489,
+		+4.231215,
+		+0.729935,
+		+0.551833,
 		+0.000000,
 	},
 	Scale: [FeatureCount]float64{
-		+0.203757,
-		+0.215527,
-		+0.014486,
-		+0.169513,
-		+0.386945,
-		+1.702823,
-		+0.159754,
-		+0.223926,
-		+2.492287,
-		+5.939076,
-		+0.166372,
-		+0.460534,
+		+0.193172,
+		+0.200201,
+		+0.018599,
+		+0.157810,
+		+0.374883,
+		+1.353479,
+		+0.105471,
+		+0.214022,
+		+2.541412,
+		+3.708612,
+		+0.195447,
+		+0.430789,
 		+1.000000,
 	},
 }
