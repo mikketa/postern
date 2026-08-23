@@ -205,10 +205,19 @@ func clusterMask(img image.Image) []bool {
 		}
 	}
 
-	// An icon covers a few percent of the picture and sits in a patch. Both
-	// bounds are loose: the cost of letting a bit of scenery through is one
-	// more candidate to rank, and the cost of excluding an icon is a challenge
-	// that cannot be solved at all.
+	// An icon covers a few percent of the picture and sits in a patch.
+	//
+	// Both were swept against the whole chain, on the half of the collected
+	// challenges the other half's numbers are not reported from. They sit at
+	// the top in both directions: at 0.20 and 0.16 and 0.12 the frame bound
+	// loses challenges by cutting icons out, at 0.35 and above it loses them
+	// faster by letting the scenery in, and the picture bound never binds at
+	// all — 0.02 and 0.18 segment the bench identically, because a colour with
+	// five percent of the pixels is already spread over more than a quarter of
+	// the frame and was refused for that.
+	//
+	// So the interesting bound is where a colour sits, not how much of the
+	// picture it is. That is the whole idea this rule rests on; see above.
 	const mostOfThePicture = 0.05
 	const mostOfTheFrame = 0.25
 	area := float64(w * h)

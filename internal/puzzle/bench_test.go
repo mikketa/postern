@@ -228,6 +228,12 @@ func TestTheWholeChainAgainstTruth(t *testing.T) {
 		if os.Getenv("HOLDOUT") != "" && halfOf(l.name) == 0 {
 			continue
 		}
+		// TUNE is the other half, and the only one a threshold may be chosen
+		// against: a number picked on the pictures it is then reported on is
+		// not a measurement of anything.
+		if os.Getenv("TUNE") != "" && halfOf(l.name) == 1 {
+			continue
+		}
 		bg, e1 := readImage(dir + "/" + l.name + "/bg.png")
 		pl, e2 := readImage(plateDir + "/" + l.name + ".png")
 		q, e3 := readImage(dir + "/" + l.name + "/ques.png")
