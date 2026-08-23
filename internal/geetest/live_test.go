@@ -122,8 +122,25 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 //
 // Which is why one attempt is not one picture any more. Recognition cannot
 // reach the whole challenge on its own — a third of pictures do not even yield
-// all their icons — but a refused answer is met with a fresh picture, and
-// four pictures fail together far less often than one does. See IconTries.
+// all their icons — but a refused answer is met with a fresh picture, and four
+// pictures fail together far less often than one does. Measured on the same
+// day against the same demo, twelve attempts each, the only difference being
+// how many pictures each attempt was allowed:
+//
+//	one picture     6 of 12
+//	four pictures  11 of 12
+//
+// One picture is where it was before any of this: 0.67 of pictures yield all
+// their icons, and 0.73 of those are read right, which is 0.49. Four is what
+// 1 - 0.5^4 predicts, 0.94, and 11 of 12 is 0.92. TestOnePictureIsNotFour
+// Pictures is the first of those numbers and this test is the second — run
+// them together or neither, because a demo's pictures are not the same
+// pictures from one week to the next.
+//
+// Worth being plain about what did and did not move the live number: the
+// network is a large gain per pictogram and no measurable gain per challenge,
+// because a challenge is largely readable or it is not. The retrying is the
+// whole of the difference between one attempt in two and eleven in twelve.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 // ICON=1 runs it anyway, which is how the number above is kept honest.
