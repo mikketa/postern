@@ -52,8 +52,16 @@ const IconTries = 4
 // a different thing: it costs a request only when the last one was wrong, and
 // it is the widget itself that offers the next picture.
 func SolveIcon(ctx context.Context) error {
+	return solveIconTries(ctx, IconTries)
+}
+
+// solveIconTries is SolveIcon over a given number of pictures. Separate from
+// the constant so that what the retrying is worth can be measured against the
+// same solver answering once, on the same day and the same demo, rather than
+// inferred from two runs taken weeks apart.
+func solveIconTries(ctx context.Context, tries int) error {
 	var last error
-	for try := range IconTries {
+	for try := range tries {
 		if try > 0 {
 			// The widget puts up the next picture on its own; this waits for
 			// it to finish doing so rather than reading the old one again.

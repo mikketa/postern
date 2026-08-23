@@ -134,6 +134,22 @@ func TestTheIconChallengeIsSolved(t *testing.T) {
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 
+// TestOnePictureIsNotFourPictures is the witness for IconTries. Retrying can
+// only look like an improvement when it is compared with something, and two
+// runs taken on different days against a live demo are not comparable: the
+// vendor's pictures are not the same pictures. This answers one picture and
+// gives up, so the pair of numbers comes from the same run of the same solver
+// against the same demo, and the only difference is how many pictures it was
+// allowed.
+func TestOnePictureIsNotFourPictures(t *testing.T) {
+	if os.Getenv("ICON") == "" {
+		t.Skip("live, and only worth running beside TestTheIconChallengeIsSolved")
+	}
+	solves(t, "Icon CAPTCHA, one picture", func(ctx context.Context) error {
+		return solveIconTries(ctx, 1)
+	})
+}
+
 // TestTheNoCaptchaChallengePasses covers the type that asks for nothing: the
 // widget decides on its own and the button is the whole interaction. Worth a
 // test anyway — it is the path where a solver has to recognise there is
