@@ -33,10 +33,17 @@ const readIcon = `(() => {
 // between the odds of one attempt and the odds of not failing four times over,
 // and nothing else available moves the number that far.
 //
-// Four, not more. Every attempt past the first is one the vendor did not need
-// to serve, and the returns fall off geometrically: at two attempts in three
-// going right, a fourth is worth two challenges in a hundred.
-const IconTries = 4
+// Five. One picture is answered right about half the time — 24 challenges of
+// 46 end to end, measured against reconstructed ground truth with half the
+// bench held out of the fitting — and half of that number is where every
+// further picture comes from: four pictures is 0.95, five is 0.97, six is
+// 0.99. Five is where the curve stops paying for what it costs, since every
+// picture past the first is one the vendor did not need to serve.
+//
+// Raising this is also the only lever that has moved the live number. Better
+// recognition is real and measurable and barely shows here, because a picture
+// is largely readable or it is not; see internal/puzzle/features.go.
+const IconTries = 5
 
 // SolveIcon clicks the icons the prompt asks for, in the order it asks, and
 // answers the next picture when one is refused.
