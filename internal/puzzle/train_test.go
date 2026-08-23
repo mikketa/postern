@@ -147,39 +147,7 @@ func TestTrainIconModel(t *testing.T) {
 		t.Skip("no LABELS")
 	}
 
-	// One group per pictogram: the candidates it could answer, exactly one of
-	// which is right. Ranking within a group is the real task.
-	var groups [][]Sample
-	var groupOf []string
-	missed := 0
-	for _, n := range names {
-		c, ok := challenges[n]
-		if !ok {
-			continue
-		}
-		answer, ok := labels[n]
-		if !ok || len(answer) != len(c.wanted) {
-			continue
-		}
-		for i, want := range c.wanted {
-			// -1 marks a pictogram whose icon segmentation missed: there is
-			// no right answer among the candidates, so the group teaches
-			// nothing about choosing between them.
-			if answer[i] < 0 || answer[i] >= len(c.found) {
-				missed++
-				continue
-			}
-			var g []Sample
-			for j, got := range c.found {
-				g = append(g, Sample{
-					Features: Features(want, got, c.found),
-					Positive: j == answer[i],
-				})
-			}
-			groups = append(groups, g)
-			groupOf = append(groupOf, n)
-		}
-	}
+	groups, groupOf, missed := groupsFrom(challenges, names, labels)
 	t.Logf("%d groupes annotes, %d pictogrammes sans candidat correct (%.0f%% rates par la segmentation)",
 		len(groups), missed, 100*float64(missed)/float64(len(groups)+missed))
 	if len(groups) < 6 {
@@ -358,6 +326,46 @@ var overlapOnly = func() Model {
 	}
 	return m
 }()
+
+// groupsFrom builds one group per labelled pictogram: the candidates it could
+// answer, exactly one of which is right. Ranking within a group is the task,
+// so the group is the unit everything downstream works in.
+//
+// It also reports how many pictograms had no right answer among the
+// candidates, which is segmentation's failure and not the model's.
+func groupsFrom(challenges map[string]challenge, names []string,
+	labels map[string][]int) (groups [][]Sample, groupOf []string, missed int) {
+
+	for _, n := range names {
+		c, ok := challenges[n]
+		if !ok {
+			continue
+		}
+		answer, ok := labels[n]
+		if !ok || len(answer) != len(c.wanted) {
+			continue
+		}
+		for i, want := range c.wanted {
+			// -1 marks a pictogram whose icon segmentation missed: there is
+			// no right answer among the candidates, so the group teaches
+			// nothing about choosing between them.
+			if answer[i] < 0 || answer[i] >= len(c.found) {
+				missed++
+				continue
+			}
+			g := make([]Sample, 0, len(c.found))
+			for j, got := range c.found {
+				g = append(g, Sample{
+					Features: Features(want, got, c.found),
+					Positive: j == answer[i],
+				})
+			}
+			groups = append(groups, g)
+			groupOf = append(groupOf, n)
+		}
+	}
+	return groups, groupOf, missed
+}
 
 func buildSheet(t *testing.T, dir string, c challenge) {
 	bg, _ := readImage(dir + "/" + c.name + "/bg.png")
