@@ -435,22 +435,40 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 	// measurements of a kind the vector did not have — the sweep reflected as
 	// well as turned, and the agreement sliced into rings rather than totalled
 	// — to get there; see features.go.
-	cost := make([][]float64, len(wanted))
+	scores := make([][]float64, len(wanted))
 	for i := range wanted {
-		cost[i] = make([]float64, len(found))
-		z := make([]float64, len(found))
-		top := math.Inf(-1)
+		scores[i] = make([]float64, len(found))
 		for j := range found {
-			z[j] = m.dot(Features(wanted[i], found[j], found))
+			scores[i][j] = m.dot(Features(wanted[i], found[j], found))
+		}
+	}
+	return pairScored(scores)
+}
+
+// pairScored picks the arrangement from a score for every pictogram against
+// every candidate, higher meaning likelier. Split out from pairWith so that a
+// different way of scoring a pair — a fitted vector, a network — is measured
+// on the same search and the same confidence, and only the scoring differs.
+func pairScored(scores [][]float64) (Pairing, error) {
+	if len(scores) == 0 || len(scores[0]) < len(scores) {
+		return Pairing{}, fmt.Errorf("puzzle: %d pictograms cannot be told apart "+
+			"by scores over %d candidates", len(scores), len(scores))
+	}
+	wanted, found := len(scores), len(scores[0])
+
+	// Normalised within the pictogram before the arrangements are compared.
+	// A scoring rule is fitted to order one pictogram's candidates against
+	// each other and nothing more, so its scores carry no scale that survives
+	// being added across pictograms: one pictogram whose candidates all score
+	// high would otherwise decide the arrangement on its own. What does add
+	// up is how much of a pictogram's own probability a candidate takes.
+	cost := make([][]float64, wanted)
+	for i, z := range scores {
+		cost[i] = make([]float64, found)
+		top := math.Inf(-1)
+		for j := range z {
 			top = math.Max(top, z[j])
 		}
-		// Normalised within the pictogram before the arrangements are
-		// compared. The model is fitted to order one pictogram's candidates
-		// against each other and nothing more, so its scores carry no scale
-		// that survives being added across pictograms: one pictogram whose
-		// candidates all score high would otherwise decide the arrangement on
-		// its own. What does add up is how much of a pictogram's own
-		// probability a candidate takes.
 		sum := 0.0
 		for j := range z {
 			sum += math.Exp(z[j] - top)
@@ -462,11 +480,11 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 	}
 
 	best, bestScore, runnerUp := []int(nil), math.Inf(1), math.Inf(1)
-	used := make([]bool, len(found))
-	cur := make([]int, 0, len(wanted))
+	used := make([]bool, found)
+	cur := make([]int, 0, wanted)
 	var walk func()
 	walk = func() {
-		if len(cur) == len(wanted) {
+		if len(cur) == wanted {
 			var sc float64
 			for i, j := range cur {
 				sc += cost[i][j]
@@ -496,7 +514,7 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 		return Pairing{}, fmt.Errorf("puzzle: no arrangement of icons could be scored")
 	}
 
-	// Confidence within the picture, not in the abstract: the model is fitted
+	// Confidence within the picture, not in the abstract: the scoring is fitted
 	// to order the candidates of one pictogram, so only the share of the score
 	// that the chosen candidate takes among them means anything. Its raw score
 	// has no scale of its own.
