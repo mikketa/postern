@@ -128,17 +128,18 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // So one attempt is not one picture. A refused answer is met with a fresh
 // picture, which is the same offer the widget makes to a person who misread
 // the first one, and five pictures fail together far less often than one does.
-// Measured on the same day against the same demo, twelve attempts each, the
+// Measured in one sitting against the same demo, twenty attempts each, the
 // only difference being how many pictures each attempt was allowed:
 //
-//	one picture     6 of 12
-//	four pictures  11 of 12
+//	one picture    11 of 20
+//	five pictures  19 of 20
 //
-// One picture is what the bench predicts, near enough. Four is what 1 - 0.5^4
-// predicts, 0.94. IconTries is five now, for 0.97. TestOnePictureIsNotFour
-// Pictures is the first of those numbers and this test is the second — run
-// them together or neither, because a demo's pictures are not the same
-// pictures from one week to the next.
+// One picture is 0.55 against the bench's 0.52, which is as close as twenty
+// attempts can tell. Five is 0.95 against the 0.98 that 1 - 0.45^5 predicts.
+// TestOnePictureIsNotFourPictures is the first of those numbers and this test
+// is the second — run them together or neither, because a demo's pictures are
+// not the same pictures from one week to the next, and a solve rate quoted
+// without the one-picture figure beside it says nothing about the solver.
 //
 // This needs a display and refuses to run without one, but it does not need
 // yours: Chrome under Xvfb is an ordinary Chrome that happens to draw nowhere,
@@ -153,7 +154,7 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // ICON=1 runs it anyway, which is how the number above is kept honest.
 func TestTheIconChallengeIsSolved(t *testing.T) {
 	if os.Getenv("ICON") == "" {
-		t.Skip("solved about half the time: see the comment above, ICON=1 to run it")
+		t.Skip("19 of 20 last measured: see the comment above, ICON=1 to run it")
 	}
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
