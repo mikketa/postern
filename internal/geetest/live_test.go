@@ -145,7 +145,7 @@ func TestOnePictureIsNotFourPictures(t *testing.T) {
 	if os.Getenv("ICON") == "" {
 		t.Skip("live, and only worth running beside TestTheIconChallengeIsSolved")
 	}
-	solves(t, "Icon CAPTCHA, one picture", func(ctx context.Context) error {
+	solvesAs(t, "Icon CAPTCHA", "Icon CAPTCHA, one picture", func(ctx context.Context) error {
 		return solveIconTries(ctx, 1)
 	})
 }
@@ -176,6 +176,14 @@ func playBoard(solve func(Board) (puzzle.Move, error)) func(context.Context) err
 // solves runs one challenge type end to end, several times over.
 func solves(t *testing.T, tab string, play func(context.Context) error) {
 	t.Helper()
+	solvesAs(t, tab, tab, play)
+}
+
+// solvesAs is solves when the challenge being driven and the run being
+// reported are not the same thing: tab is the demo's own label and has to
+// match it exactly, name is what the count is filed under.
+func solvesAs(t *testing.T, tab, name string, play func(context.Context) error) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("drives a real browser against a vendor's demo")
 	}
@@ -196,9 +204,9 @@ func solves(t *testing.T, tab string, play func(context.Context) error) {
 			time.Sleep(20 * time.Second)
 		}
 	}
-	t.Logf("%s: %d/%d", tab, ok, n)
+	t.Logf("%s: %d/%d", name, ok, n)
 	if ok < n {
-		t.Errorf("%s solved %d of %d", tab, ok, n)
+		t.Errorf("%s solved %d of %d", name, ok, n)
 	}
 }
 
