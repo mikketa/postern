@@ -95,52 +95,57 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // collect a bench and refit. For a while it was worth nothing, because eleven
 // of its twelve columns were noise and no fit over one useful column and
 // eleven useless ones beats the useful column. What it needed was measurements
-// of a different kind: the rotation sweep reflected as well as turned, and the
-// agreement sliced into rings out from the centre rather than totalled.
+// of a different kind: the rotation sweep reflected as well as turned, the
+// agreement sliced into rings out from the centre rather than totalled, and a
+// learnt description of the shape to sit beside the written-down ones.
 //
-// The last of them is not a rule anyone wrote down. It is a small convolution
-// over a log-polar description of the shape, fitted to tracings synthesised
-// from the vendor's own prompts — an unlimited supply of them, wobbled,
-// speckled, mirrored and turned, so there is nothing to memorise. On its own
-// it ranks 0.732 of real pictograms right where the written-down measurements
-// reach 0.686; together they reach 0.768, because they are wrong about
-// different pictures. Over the same 220 labelled pictograms the model settles
-// 43 whole arrangements of 59, against 36 for silhouette overlap alone, and it
-// does it without a single real answer having been fitted to. features.go and
-// net.go carry the detail, and the list of what was tried and dropped.
+// What it needed more, in the end, was to be fitted against the right thing.
+// It is fitted on tracings synthesised from the vendor's own prompts, and
+// those were being drawn at twice the size a real icon is, among distractors
+// that were all other pictograms — while what the segmenter really hands over
+// is three icons among a handful of window frames and kerbstones. Drawing them
+// at the right size and putting scenery among the distractors is worth more
+// than everything else here put together: 0.686 of pictograms ranked right
+// before, 0.759 after, and 39 whole arrangements of 59 against 45.
 //
-// Those gains barely show in a run of twenty and are not expected to: eight
-// points on two thirds of challenges is about four attempts in a hundred.
-// What twenty attempts do show is the segmentation.
+// The whole chain, measured against reconstructed ground truth rather than
+// inferred — see internal/puzzle/bench_test.go, which is the only measurement
+// here that predicts this test:
 //
-// The ceiling is measurable too. Against a bench with the scenery painted out
-// — segmentation 97% perfect — the model gets 49 whole arrangements of 76, so
-// a third of challenges is lost to recognition however well it is fed. Naming
-// the failures says what kind: near-ties between glyphs that share a
-// silhouette, a balloon and a magnifier and a map pin all being a round thing
-// on a stem, and tracings loose enough that the glyph is barely in them.
+//	icons cut out of the picture            222 of 270
+//	challenges yielding all their icons      61 of 90
+//	of those, whole arrangement right        47 of 61
+//	CHALLENGES SOLVED, ONE PICTURE           47 of 90
 //
-// Which is why one attempt is not one picture any more. Recognition cannot
-// reach the whole challenge on its own — a third of pictures do not even yield
-// all their icons — but a refused answer is met with a fresh picture, and four
-// pictures fail together far less often than one does. Measured on the same
-// day against the same demo, twelve attempts each, the only difference being
-// how many pictures each attempt was allowed:
+// A third of pictures are lost before recognition is reached: the segmenter
+// welds a drawing to its neighbour or never sees it, and no amount of
+// recognition can click an icon that was never cut out. Loosening it has been
+// measured twice — it finds more icons and settles no more challenges, because
+// the extra candidates cost the choosing more than they buy.
+//
+// So one attempt is not one picture. A refused answer is met with a fresh
+// picture, which is the same offer the widget makes to a person who misread
+// the first one, and five pictures fail together far less often than one does.
+// Measured on the same day against the same demo, twelve attempts each, the
+// only difference being how many pictures each attempt was allowed:
 //
 //	one picture     6 of 12
 //	four pictures  11 of 12
 //
-// One picture is where it was before any of this: 0.67 of pictures yield all
-// their icons, and 0.73 of those are read right, which is 0.49. Four is what
-// 1 - 0.5^4 predicts, 0.94, and 11 of 12 is 0.92. TestOnePictureIsNotFour
+// One picture is what the bench predicts, near enough. Four is what 1 - 0.5^4
+// predicts, 0.94. IconTries is five now, for 0.97. TestOnePictureIsNotFour
 // Pictures is the first of those numbers and this test is the second — run
 // them together or neither, because a demo's pictures are not the same
 // pictures from one week to the next.
 //
-// Worth being plain about what did and did not move the live number: the
-// network is a large gain per pictogram and no measurable gain per challenge,
-// because a challenge is largely readable or it is not. The retrying is the
-// whole of the difference between one attempt in two and eleven in twelve.
+// This needs a display and refuses to run without one, but it does not need
+// yours: Chrome under Xvfb is an ordinary Chrome that happens to draw nowhere,
+// which is a different thing from headless Chrome and is not refused.
+//
+//	Xvfb :77 -screen 0 1600x1000x24 &
+//	DISPLAY=:77 ICON=1 POSTERN_GEETEST_RUNS=20 go test -count=1 \
+//	    -run 'TestTheIconChallengeIsSolved|TestOnePicture' \
+//	    ./internal/geetest -v -timeout 70m
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 // ICON=1 runs it anyway, which is how the number above is kept honest.

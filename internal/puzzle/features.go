@@ -34,20 +34,29 @@ import "math"
 // to spill past the pictogram, a half-segmented icon tends to fall short, and
 // the total treats those as the same failure.
 //
-// Measured over 220 labelled pictograms from 88 collected challenges,
-// cross-validated by challenge:
+// Measured over 220 labelled pictograms from 88 collected challenges. Every
+// row below is fitted on synthesised tracings only, so no real answer is spent
+// on fitting and all of them are left to measure with:
 //
 //	silhouette overlap alone   0.664 per pictogram, 36 whole arrangements of 59
-//	the written-down rules     0.686 per pictogram, 39 whole arrangements of 59
-//	the network alone          0.732 per pictogram, 37 whole arrangements of 59
-//	the two together           0.768 per pictogram, 43 whole arrangements of 59
+//	the written-down rules     0.759 per pictogram, 45 whole arrangements of 59
+//	with the network as well   0.764 per pictogram, 47 whole arrangements of 59
 //
-// The last row is why the network is here. It is not that it is better — it
-// settles fewer whole challenges on its own than the rules do — but that it is
-// wrong about different pictures, and adding a measurement only ever helps for
-// that reason. Note also how little the arrangement moves for how much the
-// pictogram does: a challenge is largely readable or it is not, and the three
-// pictograms of one challenge fail together.
+// Note how little the arrangement moves for how much the pictogram does, and
+// how little the last row adds. Both have the same cause, and it is worth
+// being plain about it.
+//
+// A challenge is largely readable or it is not: its three pictograms fail
+// together, so ranking each one better does not settle proportionally more
+// challenges. And the network — a fitted description rather than a written
+// rule, see net.go — was worth 0.082 per pictogram when it arrived and is
+// worth 0.005 now. What changed in between was not the network but what the
+// rules were fitted against: tracings drawn at the size a real icon is rather
+// than twice it, and scenery among the distractors rather than only other
+// glyphs. On the wrong training data the network was making up for a fit that
+// had been handicapped; on the right data the written rules very nearly reach
+// it alone. It is kept because two whole arrangements is two, and because it
+// costs one embedding per shape — but it is not what it looked like.
 //
 // Eight rings is where the rings stop paying — twelve and sixteen are no
 // better — and four other ideas were tried against the same bench and dropped
