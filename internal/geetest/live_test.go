@@ -219,34 +219,11 @@ func attempt(t *testing.T, i int, tab string, play func(context.Context) error) 
 	clickSelector(ctx, "[class*=geetest_submit]:not([class*=geetest_disable])")
 	chromedp.Run(ctx, chromedp.Sleep(5*time.Second))
 
-	won, said := verdict(ctx)
+	won, said := Verdict(ctx)
 	if !won {
 		t.Logf("attempt %d: the widget said %q", i, said)
 	}
 	return won
-}
-
-// verdict reads what the widget says about the attempt. Read from its words
-// rather than from a class name: there is no success element in this version,
-// so a selector reports failure on a challenge that visibly passed.
-func verdict(ctx context.Context) (bool, string) {
-	var out struct {
-		Success bool   `json:"success"`
-		Said    string `json:"said"`
-	}
-	var raw json.RawMessage
-	if err := chromedp.Run(ctx, chromedp.Evaluate(`(() => {
-	  const t = [...document.querySelectorAll('[class*=geetest_]')]
-	    .map(e => (e.innerText||'').trim()).filter(Boolean);
-	  return {
-	    success: t.some(s => /verification success/i.test(s)),
-	    said: t.slice(0, 2).join(' | '),
-	  };
-	})()`, &raw)); err != nil {
-		return false, err.Error()
-	}
-	json.Unmarshal(raw, &out)
-	return out.Success, out.Said
 }
 
 func clickLabel(ctx context.Context, label string) error {

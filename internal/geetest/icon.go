@@ -25,7 +25,21 @@ const readIcon = `(() => {
   return { bg: box('[class*=geetest_bg]'), prompt: box('[class*=geetest_ques_tips]') };
 })()`
 
-// SolveIcon clicks the icons the prompt asks for, in the order it asks.
+// IconTries is how many pictures SolveIcon will answer before giving up.
+//
+// A refused answer is not the end of the challenge: the widget says to try
+// again and puts up a fresh picture, which is the same offer it makes to a
+// person who misread the first one. Answering that one too is the difference
+// between the odds of one attempt and the odds of not failing four times over,
+// and nothing else available moves the number that far.
+//
+// Four, not more. Every attempt past the first is one the vendor did not need
+// to serve, and the returns fall off geometrically: at two attempts in three
+// going right, a fourth is worth two challenges in a hundred.
+const IconTries = 4
+
+// SolveIcon clicks the icons the prompt asks for, in the order it asks, and
+// answers the next picture when one is refused.
 //
 // It answers whatever picture it is given. Refreshing until a picture looked
 // readable was tried — the widget's refresh button is an ordinary control, and
@@ -34,8 +48,80 @@ const readIcon = `(() => {
 // against two captured challenges, only one of which had a known answer. It
 // measured 0/5 while tripling the requests made of the vendor, so it is gone.
 // The confidence is still reported by PairIcons, for a caller that has the
-// data to calibrate it.
+// data to calibrate it. Answering a picture the widget has already refused is
+// a different thing: it costs a request only when the last one was wrong, and
+// it is the widget itself that offers the next picture.
 func SolveIcon(ctx context.Context) error {
+	var last error
+	for try := range IconTries {
+		if try > 0 {
+			// The widget puts up the next picture on its own; this waits for
+			// it to finish doing so rather than reading the old one again.
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(2500 * time.Millisecond):
+			}
+		}
+		if err := solveIconOnce(ctx); err != nil {
+			// A picture that could not be read at all is worth another
+			// picture, not an abandoned challenge — but only if the widget
+			// still has one to give.
+			last = err
+			if !iconIsWaiting(ctx) {
+				return err
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(4 * time.Second):
+		}
+		done, said := Verdict(ctx)
+		if done {
+			return nil
+		}
+		last = fmt.Errorf("geetest: the icon challenge was refused: %s", said)
+		if !iconIsWaiting(ctx) {
+			return last
+		}
+	}
+	return last
+}
+
+// iconIsWaiting says whether there is still a picture on screen to answer.
+func iconIsWaiting(ctx context.Context) bool {
+	var w struct{ Bg *Box }
+	if err := evaluateInto(ctx, readIcon, &w); err != nil {
+		return false
+	}
+	return w.Bg != nil
+}
+
+// Verdict reads what the widget says about the answer just given. Read from
+// its words rather than from a class name: this version has no success element,
+// so a selector reports failure on a challenge that visibly passed. Not
+// specific to the icon challenge — every type reports itself the same way.
+func Verdict(ctx context.Context) (bool, string) {
+	var out struct {
+		Success bool   `json:"success"`
+		Said    string `json:"said"`
+	}
+	if err := evaluateInto(ctx, `(() => {
+	  const t = [...document.querySelectorAll('[class*=geetest_]')]
+	    .map(e => (e.innerText||'').trim()).filter(Boolean);
+	  return {
+	    success: t.some(s => /verification success/i.test(s)),
+	    said: t.slice(0, 2).join(' | '),
+	  };
+	})()`, &out); err != nil {
+		return false, err.Error()
+	}
+	return out.Success, out.Said
+}
+
+func solveIconOnce(ctx context.Context) error {
 	var w struct {
 		Bg     *Box `json:"bg"`
 		Prompt *Box `json:"prompt"`
