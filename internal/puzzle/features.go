@@ -50,7 +50,7 @@ import "math"
 // angles, which was worse.
 
 // FeatureCount is the length of a comparison vector.
-const FeatureCount = 23
+const FeatureCount = 24
 
 // FeatureNames label the vector, for reading a trained model back.
 var FeatureNames = [FeatureCount]string{
@@ -61,6 +61,7 @@ var FeatureNames = [FeatureCount]string{
 	"fit.excess", "fit.missing",
 	"ring.0", "ring.1", "ring.2", "ring.3",
 	"ring.4", "ring.5", "ring.6", "ring.7",
+	"net.alike",
 	"bias",
 }
 
@@ -169,7 +170,22 @@ func Features(want, got Shape, context []Shape) [FeatureCount]float64 {
 			f[14+i] = v
 		}
 	}
-	f[22] = 1 // bias
+	// What the network makes of the pair.
+	//
+	// Everything above is a rule somebody wrote down; this is a description
+	// fitted to thousands of synthesised tracings, and it is the one
+	// measurement here that was never designed. On its own it ranks 0.732 of
+	// pictograms right against the rest of the vector's 0.686, and the two
+	// together reach 0.768 — they are wrong about different pictures, which is
+	// the only reason adding a measurement ever helps. netweights.go carries
+	// it and net.go says how it is computed.
+	//
+	// Both shapes are described afresh for every pair, which does the same
+	// work several times over. It costs about fifty milliseconds on a whole
+	// challenge, so it stays that way until it is worth more than the
+	// signature it would take to hand descriptions in from outside.
+	f[22] = trainedNet.Alike(want, got)
+	f[23] = 1 // bias
 
 	return f
 }

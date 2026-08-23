@@ -311,6 +311,14 @@ func TestAModelFittedOnSynthesisedTracingsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// This is the fit the shipped weights come from. Fitted on tracings the
+	// vendor never drew, it ranks 0.695 of real pictograms right against the
+	// 0.679 of a fit on the real answers themselves, and it leaves every
+	// labelled challenge free to measure it rather than spent on fitting it.
+	if out := os.Getenv("EMIT"); out != "" {
+		emit(t, out, "synthesised tracings", m)
+	}
+
 	labels := readLabels(t, labelPath)
 	real, _, _ := groupsFrom(challenges, names, labels)
 	if len(real) == 0 {

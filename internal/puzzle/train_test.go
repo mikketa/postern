@@ -53,13 +53,27 @@ import (
 // like it in this package comes from. Around ten challenges per background are
 // needed before the median is clean.
 //
-//	BENCH_DIR=<dir> LABELS=<file> EMIT=weights.go go test \
+//	BENCH_DIR=<dir> LABELS=<file> go test \
 //	    -count=1 ./internal/puzzle -run TestTrainIconModel -v
-//	    fits the model, reports cross-validated accuracy against a baseline,
-//	    and writes the weights. EMIT is relative to this directory, because a
-//	    test runs in the directory of the package it tests. -count=1 matters:
-//	    the labels file is not a declared dependency, so a cached result will
-//	    silently ignore edits to it.
+//	    fits a model on the labelled answers and reports cross-validated
+//	    accuracy against a baseline. -count=1 matters: the labels file is not
+//	    a declared dependency, so a cached result will silently ignore edits
+//	    to it.
+//
+// The shipped weights no longer come from here. Fitting on tracings
+// synthesised from the vendor's own prompts measures better — 0.695 of
+// pictograms ranked right against 0.679 — and spends none of the labelled
+// challenges on fitting, so all of them are left to measure with:
+//
+//	BENCH_DIR=<dir> LABELS=<file> EMIT=weights.go go test -count=1 \
+//	    ./internal/puzzle -run TestAModelFittedOnSynthesisedTracingsOnly -v
+//	    writes weights.go. EMIT is relative to this directory, because a test
+//	    runs in the directory of the package it tests.
+//
+//	BENCH_DIR=<dir> LABELS=<file> EMITNET=netweights.go go test -count=1 \
+//	    ./internal/puzzle -run TestANetworkFitted -v -timeout 30m
+//	    refits the network the vector's last measurement reads from. Do this
+//	    one first: weights.go is fitted against whatever netweights.go says.
 //
 // Read the run's last line. weights.go declares its arrays as [FeatureCount],
 // so a file left over from a shorter feature vector still compiles, with the
@@ -311,7 +325,7 @@ func TestTrainIconModel(t *testing.T) {
 		t.Logf("  %-18s %+.4f", FeatureNames[i], w)
 	}
 	if out := os.Getenv("EMIT"); out != "" {
-		emit(t, out, final)
+		emit(t, out, "labelled challenges", final)
 	}
 }
 
@@ -449,10 +463,10 @@ func readLabels(t *testing.T, path string) map[string][]int {
 	return out
 }
 
-func emit(t *testing.T, path string, m Model) {
+func emit(t *testing.T, path, from string, m Model) {
 	var b strings.Builder
 	b.WriteString("package puzzle\n\n")
-	b.WriteString("// Code generated from labelled challenges. DO NOT EDIT.\n\n")
+	b.WriteString(fmt.Sprintf("// Code generated from %s. DO NOT EDIT.\n\n", from))
 	b.WriteString("// trained is the fitted comparison model.\n")
 	b.WriteString("var trained = Model{\n\tWeights: [FeatureCount]float64{\n")
 	for i, w := range m.Weights {

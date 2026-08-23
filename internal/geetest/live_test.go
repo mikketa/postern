@@ -91,20 +91,27 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // that handed back a different candidate order run to run.
 //
 // The recognition is a fitted model — measurements of a pictogram against a
-// candidate, ranked within the pictogram, fitted to those answers; see
-// internal/puzzle/train_test.go to collect a bench and refit. For a while it
-// was worth nothing, because eleven of its twelve columns were noise and no
-// fit over one useful column and eleven useless ones beats the useful column.
-// What it needed was measurements of a different kind: the rotation sweep
-// reflected as well as turned, and the agreement sliced into rings out from
-// the centre rather than totalled. Cross-validated by challenge over 220
-// labelled pictograms it gets 43 whole arrangements of 59, against 36 for
-// silhouette overlap alone. features.go carries the detail and the list of
-// what was tried and dropped.
+// candidate, ranked within the pictogram; see internal/puzzle/train_test.go to
+// collect a bench and refit. For a while it was worth nothing, because eleven
+// of its twelve columns were noise and no fit over one useful column and
+// eleven useless ones beats the useful column. What it needed was measurements
+// of a different kind: the rotation sweep reflected as well as turned, and the
+// agreement sliced into rings out from the centre rather than totalled.
 //
-// That last gain does not show here and is not expected to: eight points on
-// two thirds of challenges is about four in a hundred attempts, and twenty
-// attempts cannot see it. What twenty attempts do show is the segmentation.
+// The last of them is not a rule anyone wrote down. It is a small convolution
+// over a log-polar description of the shape, fitted to tracings synthesised
+// from the vendor's own prompts — an unlimited supply of them, wobbled,
+// speckled, mirrored and turned, so there is nothing to memorise. On its own
+// it ranks 0.732 of real pictograms right where the written-down measurements
+// reach 0.686; together they reach 0.768, because they are wrong about
+// different pictures. Over the same 220 labelled pictograms the model settles
+// 43 whole arrangements of 59, against 36 for silhouette overlap alone, and it
+// does it without a single real answer having been fitted to. features.go and
+// net.go carry the detail, and the list of what was tried and dropped.
+//
+// Those gains barely show in a run of twenty and are not expected to: eight
+// points on two thirds of challenges is about four attempts in a hundred.
+// What twenty attempts do show is the segmentation.
 //
 // The ceiling is measurable too. Against a bench with the scenery painted out
 // — segmentation 97% perfect — the model gets 49 whole arrangements of 76, so
@@ -112,6 +119,11 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // the failures says what kind: near-ties between glyphs that share a
 // silhouette, a balloon and a magnifier and a map pin all being a round thing
 // on a stem, and tracings loose enough that the glyph is barely in them.
+//
+// Which is why one attempt is not one picture any more. Recognition cannot
+// reach the whole challenge on its own — a third of pictures do not even yield
+// all their icons — but a refused answer is met with a fresh picture, and
+// four pictures fail together far less often than one does. See IconTries.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 // ICON=1 runs it anyway, which is how the number above is kept honest.
