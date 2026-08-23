@@ -33,16 +33,70 @@ import (
 // traceGlyph draws a glyph the way the vendor's icons are drawn: its outline,
 // thickened, wobbled, speckled, and turned.
 func traceGlyph(g Shape, rng *rand.Rand) Shape {
+	return traceGlyphAt(g, rng, 40+rng.IntN(28))
+}
+
+// traceGlyphAt draws a tracing and then puts it at the size a real one is.
+//
+// side is the longer side of the finished tracing in pixels. It matters more
+// than it looks: measured over the collected challenges, a real drawn icon is
+// about fifty pixels across, and a tracing left at the size it is drawn at
+// comes out at a hundred and four. Some of what is measured about a shape does
+// not care — overlap normalises the size away, and so does the log-polar map —
+// but how much of a shape is edge does care, since a stroke of a given
+// thickness is a larger share of a smaller drawing. Fitted at twice the size,
+// that measurement was fitted against the wrong number.
+//
+// It matters more again once scenery is among the distractors, because
+// scenery comes out of real pictures at the real size. A model handed
+// hundred-pixel drawings and fifty-pixel scenery can tell them apart by size
+// alone, which is a rule that wins every synthesised group and nothing at all
+// against the vendor.
+func traceGlyphAt(g Shape, rng *rand.Rand, side int) Shape {
 	// Worked at four times the glyph's own size, because a 24-pixel glyph has
 	// no room for a stroke three pixels thick.
 	s := upscale(g, 4)
-	s = outlineOf(s, 2+rng.IntN(3))
+	// Thick enough that the stroke survives being put back down to size.
+	// Drawn at 2 to 4 and then halved, a tracing came out at 505 pixels
+	// against a real icon's 1023 at the same width across; at 4 to 8 the two
+	// match, which is what the measurement of how much of a shape is edge is
+	// fitted against.
+	s = outlineOf(s, 4+rng.IntN(5))
 	s = wobble(s, rng, 1.5+rng.Float64()*2.5)
 	s = speckle(s, rng, 0.80+rng.Float64()*0.18)
 	if rng.IntN(2) == 0 {
 		s = mirrorShape(s)
 	}
-	return rotate(s, rng.Float64()*2*math.Pi)
+	s = rotate(s, rng.Float64()*2*math.Pi)
+	return resample(s, side)
+}
+
+// resample redraws a shape with its longer side at side pixels.
+//
+// Backward-sampled: for every pixel of the result, ask which pixel of the
+// original it came from. Mapping the other way leaves a lattice of holes
+// whenever the result is the larger of the two, and a shape full of holes is
+// not the shape that was asked for.
+func resample(s Shape, side int) Shape {
+	long := max(s.W, s.H)
+	if long == 0 || side <= 0 {
+		return s
+	}
+	f := float64(long) / float64(side)
+	w := max(1, int(float64(s.W)/f+0.5))
+	h := max(1, int(float64(s.H)/f+0.5))
+	out := Shape{Mask: make([]bool, w*h), W: w, H: h, sourceW: s.sourceW}
+	for y := range h {
+		for x := range w {
+			sx := min(s.W-1, int((float64(x)+0.5)*f))
+			sy := min(s.H-1, int((float64(y)+0.5)*f))
+			if s.Mask[sy*s.W+sx] {
+				out.Mask[y*w+x] = true
+				out.Pixels++
+			}
+		}
+	}
+	return out
 }
 
 func upscale(s Shape, f int) Shape {
@@ -278,12 +332,24 @@ func TestAModelFittedOnSynthesisedTracingsOnly(t *testing.T) {
 	// cannot win by noticing which candidate was drawn rather than which one
 	// is the right shape.
 	const perGlyph, distractors = 8, 4
+	junk := sceneryIfAny(t)
+	t.Logf("%d glyphes, %d pieces de decor", len(glyphs), len(junk))
 	rng := rand.New(rand.NewPCG(3, 5))
 	var train [][]Sample
 	for range perGlyph {
 		for i, g := range glyphs {
 			cand := []Shape{traceGlyph(g, rng)}
-			for range distractors {
+			for k := range distractors {
+				// Half the distractors are scenery, which is roughly the mix a
+				// real picture hands over: three icons among six or so
+				// candidates. Fitted against traced glyphs alone the model
+				// learns to tell one drawing from another and nothing about
+				// telling a drawing from a kerbstone, which is the mistake
+				// that actually loses challenges. See scenery_test.go.
+				if len(junk) > 0 && k%2 == 1 {
+					cand = append(cand, junk[rng.IntN(len(junk))])
+					continue
+				}
 				j := rng.IntN(len(glyphs))
 				for j == i {
 					j = rng.IntN(len(glyphs))
