@@ -58,15 +58,11 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 	solves(t, "Slide CAPTCHA", SolveSlider)
 }
 
-// TestTheNoCaptchaChallengePasses covers the type that asks for nothing: the
-// widget decides on its own and the button is the whole interaction. Worth a
-// test anyway — it is the path where a solver has to recognise there is
-// nothing to solve, rather than wait for a challenge that is never coming.
 // TestTheIconChallengeIsSolved is the one type that is not solved outright.
 //
-// Measured: 3 of 5 and 2 of 5, so 5 of 10. It was 5 of 35 before this work —
-// seven series of five reading 0, 2, 1, 0, 1, 1, 0 — and what moved it was not
-// the recognition but the segmentation in front of it.
+// Measured across three series since this work: 3 of 5, 2 of 5, 5 of 10, so 10
+// of 20. It was 5 of 35 before — seven series of five reading 0, 2, 1, 0, 1, 1,
+// 0 — and what moved it was the segmentation in front of the recognition.
 //
 // The bench that says so is built from the vendor's own artwork. GeeTest draws
 // its icons over a small pool of reused photographs, so the per-pixel median
@@ -78,10 +74,10 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // was wrong often enough that a model losing to plain silhouette overlap
 // looked like one beating it, and this comment said so.
 //
-// Against that truth, over 47 challenges and 135 drawn icons:
+// Against that truth, over 88 challenges and 261 drawn icons:
 //
-//	segmentation finds the icon        78/135 before, 115/135 now
-//	challenges yielding all three      12/47 before,  32/47 now
+//	segmentation finds the icon        0.578 before, 0.843 now
+//	challenges yielding all three      12 of 47 before, 59 of 88 now
 //
 // What changed is the question segmentation asks. It used to take the
 // commonest colour for the background and call anything far from it an icon,
@@ -94,24 +90,28 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // pinholes in a speckled stroke and so filled nothing, and an unstable sort
 // that handed back a different candidate order run to run.
 //
-// The matching has a ceiling of its own, and it is measurable the same way.
-// Run against a bench with the scenery painted out — segmentation effectively
-// perfect, 128 of 133 icons found — it got the whole arrangement right 24
-// times out of 39, so three fifths of challenges was all it could do however
-// well the segmentation fed it.
-//
-// The recognition is a fitted model: measurements of a pictogram against a
-// candidate, ranked within the pictogram, fitted to the answers above. See
+// The recognition is a fitted model — measurements of a pictogram against a
+// candidate, ranked within the pictogram, fitted to those answers; see
 // internal/puzzle/train_test.go to collect a bench and refit. For a while it
-// was worth nothing — 0.650 of pictograms against 0.661 for plain silhouette
-// overlap — because eleven of its twelve columns were noise and no fit over
-// one useful column and eleven noisy ones beats the useful column. What it
-// needed was not a better fit but measurements of a different kind: the
-// rotation sweep reflected as well as turned, and the agreement sliced into
-// rings out from the centre instead of totalled. Cross-validated by challenge
-// over 115 labelled pictograms it now ranks 0.702 of pictograms right against
-// 0.652, and gets 24 whole arrangements of 32 against 21. features.go carries
-// the detail.
+// was worth nothing, because eleven of its twelve columns were noise and no
+// fit over one useful column and eleven useless ones beats the useful column.
+// What it needed was measurements of a different kind: the rotation sweep
+// reflected as well as turned, and the agreement sliced into rings out from
+// the centre rather than totalled. Cross-validated by challenge over 220
+// labelled pictograms it gets 43 whole arrangements of 59, against 36 for
+// silhouette overlap alone. features.go carries the detail and the list of
+// what was tried and dropped.
+//
+// That last gain does not show here and is not expected to: eight points on
+// two thirds of challenges is about four in a hundred attempts, and twenty
+// attempts cannot see it. What twenty attempts do show is the segmentation.
+//
+// The ceiling is measurable too. Against a bench with the scenery painted out
+// — segmentation 97% perfect — the model gets 49 whole arrangements of 76, so
+// a third of challenges is lost to recognition however well it is fed. Naming
+// the failures says what kind: near-ties between glyphs that share a
+// silhouette, a balloon and a magnifier and a map pin all being a round thing
+// on a stem, and tracings loose enough that the glyph is barely in them.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
 func TestTheIconChallengeIsSolved(t *testing.T) {
@@ -119,6 +119,10 @@ func TestTheIconChallengeIsSolved(t *testing.T) {
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 
+// TestTheNoCaptchaChallengePasses covers the type that asks for nothing: the
+// widget decides on its own and the button is the whole interaction. Worth a
+// test anyway — it is the path where a solver has to recognise there is
+// nothing to solve, rather than wait for a challenge that is never coming.
 func TestTheNoCaptchaChallengePasses(t *testing.T) {
 	solves(t, "No CAPTCHA", func(context.Context) error { return nil })
 }
