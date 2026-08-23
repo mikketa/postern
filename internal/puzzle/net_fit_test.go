@@ -128,39 +128,8 @@ func netScores(n *Net, wanted, found []Shape) [][]float64 {
 	return out
 }
 
-func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
-	dir := os.Getenv("BENCH_DIR")
-	labelPath := os.Getenv("LABELS")
-	if dir == "" || labelPath == "" {
-		t.Skip("no BENCH_DIR or LABELS")
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Skip(err)
-	}
-
-	var names []string
-	challenges := map[string]challenge{}
-	var folds []netFold
-	for _, e := range entries {
-		c, ok := loadChallenge(dir, e.Name())
-		if !ok {
-			continue
-		}
-		names = append(names, e.Name())
-		challenges[e.Name()] = c
-		for _, g := range c.wanted {
-			folds = append(folds, netFold{glyph: g, want: polarMap(g)})
-		}
-	}
-	if len(folds) < 20 {
-		t.Skip("not enough prompts to synthesise from")
-	}
-	labels := readLabels(t, labelPath)
-
-	epochs := envInt("NET_EPOCHS", 40)
-	rate := envFloat("NET_RATE", 0.05)
-	decay := envFloat("NET_DECAY", 1e-4)
+// fitNet trains a network on tracings synthesised fresh every epoch.
+func fitNet(t *testing.T, folds []netFold, epochs int, rate, decay float64) *Net {
 	const batch, distractors = 32, 4
 
 	n := NewNet(7)
@@ -195,13 +164,56 @@ func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
 			cos := 0.5 * (1 + math.Cos(math.Pi*float64(e)/float64(epochs)))
 			n.step(grads, mom, rate*warm*(0.1+0.9*cos), decay)
 		}
-		if e%5 == 0 || e == epochs-1 {
-			t.Logf("epoque %2d: perte %.4f, tracés bien classés %.3f, echelle %.1f",
+		if e%20 == 0 || e == epochs-1 {
+			t.Logf("epoque %3d: perte %.4f, tracés bien classés %.3f, echelle %.1f",
 				e, loss/float64(seen), float64(right)/float64(seen), n.Scale)
 		}
 	}
+	return n
+}
+
+func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
+	dir := os.Getenv("BENCH_DIR")
+	labelPath := os.Getenv("LABELS")
+	if dir == "" || labelPath == "" {
+		t.Skip("no BENCH_DIR or LABELS")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Skip(err)
+	}
+
+	var names []string
+	challenges := map[string]challenge{}
+	var folds []netFold
+	for _, e := range entries {
+		c, ok := loadChallenge(dir, e.Name())
+		if !ok {
+			continue
+		}
+		names = append(names, e.Name())
+		challenges[e.Name()] = c
+		for _, g := range c.wanted {
+			folds = append(folds, netFold{glyph: g, want: polarMap(g)})
+		}
+	}
+	if len(folds) < 20 {
+		t.Skip("not enough prompts to synthesise from")
+	}
+	labels := readLabels(t, labelPath)
+
+	n := fitNet(t, folds, envInt("NET_EPOCHS", 40),
+		envFloat("NET_RATE", 0.05), envFloat("NET_DECAY", 1e-4))
 
 	// Every real group the network never saw.
+	//
+	// The arrangement is scored at several temperatures as well as the one the
+	// network learnt. Which candidate ranks first does not depend on the
+	// temperature at all, so the per-pictogram figure is the same for every
+	// one of them; the arrangement is a trade-off between pictograms, and a
+	// score too sharp to gradate leaves it nothing to trade off with.
+	temps := []float64{1, 2, 4, 8, 16, 32}
+	wholeAt := make([]int, len(temps))
 	groups, first, whole, ok := 0, 0, 0, 0
 	for _, name := range names {
 		c := challenges[name]
@@ -247,7 +259,34 @@ func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
 		if hit {
 			ok++
 		}
+
+		for ti, temp := range temps {
+			cooled := make([][]float64, len(sc))
+			for i := range sc {
+				cooled[i] = make([]float64, len(sc[i]))
+				for j := range sc[i] {
+					cooled[i][j] = sc[i][j] / temp
+				}
+			}
+			q, err := pairScored(cooled)
+			if err != nil {
+				continue
+			}
+			right := true
+			for i, j := range q.Order {
+				if j != answer[i] {
+					right = false
+				}
+			}
+			if right {
+				wholeAt[ti]++
+			}
+		}
 	}
+	if out := os.Getenv("EMITNET"); out != "" {
+		emitNet(t, out, n)
+	}
+
 	if groups == 0 {
 		t.Skip("no real groups to measure against")
 	}
@@ -257,6 +296,10 @@ func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
 	if whole > 0 {
 		t.Logf("DEFIS ENTIERS: %d/%d = %.3f  (vecteur sur vraies réponses: 43/59 = 0.729)",
 			ok, whole, float64(ok)/float64(whole))
+		for ti, temp := range temps {
+			t.Logf("  a l'echelle %.1f (temperature %.0f): %d/%d",
+				n.Scale/temp, temp, wholeAt[ti], whole)
+		}
 	}
 }
 
