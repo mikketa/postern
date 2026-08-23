@@ -32,6 +32,15 @@ import (
 // The number to read is the last one: challenges solved out of challenges
 // tried, counting one lost to segmentation as lost. That is what an attempt
 // against the live widget is, and nothing else here predicts it.
+//
+// TUNE restricts it to one half of the collected challenges and HOLDOUT to the
+// other, which is the only honest way to choose a threshold against it: a
+// number picked on the pictures it is then reported on measures nothing.
+// Three of them have been swept that way and every one already sat at its
+// best — the two colour bounds in clusterMask, in both directions, and the
+// pixel floor below, which beats 80, 120, 160, 260 and 340. Loosening the
+// welding has been tried twice and finds more icons without settling more
+// challenges. The segmentation is where it is going to be for this design.
 
 // truthLine is one challenge's answer: which drawn icon each pictogram means,
 // as an index into the difference against the reconstructed photograph.
@@ -250,7 +259,7 @@ func TestTheWholeChainAgainstTruth(t *testing.T) {
 		}
 		tried++
 
-		cand := FindIcons(bg, 200, len(wanted))
+		cand := FindIcons(bg, benchMinPixels(), len(wanted))
 		answer := answerFor(drawn, w, l.want, cand)
 		all := true
 		for _, a := range answer {
@@ -287,6 +296,18 @@ func TestTheWholeChainAgainstTruth(t *testing.T) {
 	t.Logf("defis entierement decoupes %d/%d = %.3f", complete, tried, ratio(complete, tried))
 	t.Logf("  dont l'arrangement est juste %d/%d = %.3f", whole, complete, ratio(whole, complete))
 	t.Logf("DEFIS RESOLUS            %d/%d = %.3f", whole, tried, ratio(whole, tried))
+}
+
+// benchMinPixels is the floor SolveIcon passes, unless a sweep is moving it.
+// Kept in the test rather than in FindIcons: a shipped binary should not
+// change what it segments because of an environment variable.
+func benchMinPixels() int {
+	if v := os.Getenv("MIN_PIXELS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 200
 }
 
 func ratio(a, b int) float64 {
