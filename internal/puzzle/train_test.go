@@ -180,6 +180,7 @@ func TestTrainIconModel(t *testing.T) {
 	folds := 4
 	var accs []float64
 	var wholes, basewholes [][2]int
+	var wrong []string
 	for fold := range folds {
 		var train, test [][]Sample
 		for i, g := range groups {
@@ -192,7 +193,7 @@ func TestTrainIconModel(t *testing.T) {
 		if len(test) == 0 || len(train) == 0 {
 			continue
 		}
-		m, err := Train(train, 400, 0.05, 0.3)
+		m, err := Train(train, 400, 0.05, 0.1)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,6 +240,8 @@ func TestTrainIconModel(t *testing.T) {
 				}
 				if right {
 					*cand.at++
+				} else if cand.at == &wholeOK {
+					wrong = append(wrong, n)
 				}
 			}
 		}
@@ -266,6 +269,10 @@ func TestTrainIconModel(t *testing.T) {
 		t.Logf("DEFIS ENTIERS VALIDES: %d/%d = %.3f", ok, tot, float64(ok)/float64(tot))
 		t.Logf("DEFIS ENTIERS, RECOUVREMENT SEUL: %d/%d = %.3f",
 			baseOK, tot, float64(baseOK)/float64(tot))
+		// Named, because the next improvement comes from looking at what is
+		// still wrong rather than from another sweep of the same knobs.
+		sort.Strings(wrong)
+		t.Logf("DEFIS RATES: %s", strings.Join(wrong, " "))
 	}
 
 	// A baseline to beat: pick whichever candidate overlaps most.
@@ -309,7 +316,7 @@ func TestTrainIconModel(t *testing.T) {
 		}
 	}
 
-	final, err := Train(groups, 600, 0.05, 0.3)
+	final, err := Train(groups, 600, 0.05, 0.1)
 	if err != nil {
 		t.Fatal(err)
 	}
