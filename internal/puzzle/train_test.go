@@ -21,7 +21,7 @@ import (
 // This is how weights.go is produced, and it is kept because a model nobody
 // can retrain is a model that rots: the vendor changes its artwork, and
 // whoever comes next needs to be able to collect fresh challenges and refit
-// rather than reverse-engineer twelve constants.
+// rather than reverse-engineer two dozen constants.
 //
 // It needs a bench of collected challenges, which is deliberately not in this
 // repository — those are the vendor's pictures. Collect one with
@@ -30,9 +30,28 @@ import (
 //	BENCH_DIR=<dir> SHEETS=1 go test ./internal/puzzle -run TestTrainIconModel -v
 //	    draws one sheet per challenge: the prompt enlarged above, the picture
 //	    below with every candidate outlined in its own colour. Read the answers
-//	    off by eye into a labels file, one line per challenge: "07 2 0 1",
-//	    meaning pictogram 1 is candidate 2, pictogram 2 is candidate 0, and so
-//	    on. -1 where segmentation missed the icon entirely.
+//	    off into a labels file, one line per challenge: "07 2 0 1", meaning
+//	    pictogram 1 is candidate 2, pictogram 2 is candidate 0, and so on. -1
+//	    where segmentation missed the icon entirely.
+//
+// Do not read those answers off the sheets by eye if you can avoid it. It was
+// done that way once and the label set was wrong often enough to make a model
+// that loses to plain silhouette overlap look like one that beats it — the
+// figures in features.go were derived twice, and only the second set meant
+// anything. There is a better way, because the vendor reuses a small pool of
+// photographs behind its challenges:
+//
+//	group the collected challenges by their background, which a coarse
+//	thumbnail distance separates cleanly; take the per-pixel median of each
+//	group, which is that photograph with every drawn icon voted away; subtract
+//	it from each challenge, and what is left is its icons exactly.
+//
+// Cut those out and lay them beside the prompt and the answer reads itself.
+// The same subtraction is the only honest measure of how well segmentation is
+// doing: match each icon to the candidate whose box overlaps it and count the
+// ones with no candidate at all. That is where "115 of 135" and every figure
+// like it in this package comes from. Around ten challenges per background are
+// needed before the median is clean.
 //
 //	BENCH_DIR=<dir> LABELS=<file> EMIT=weights.go go test \
 //	    -count=1 ./internal/puzzle -run TestTrainIconModel -v
