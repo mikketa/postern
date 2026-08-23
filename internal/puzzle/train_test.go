@@ -46,6 +46,13 @@ import (
 //	group, which is that photograph with every drawn icon voted away; subtract
 //	it from each challenge, and what is left is its icons exactly.
 //
+// That first step is plate_test.go, the subtraction is bench_test.go, and
+// which drawn icon each pictogram means no longer has to be read by eye —
+// autolabel_test.go proposes it and reports how sure it is, and above a margin
+// chosen on one half of the bench it was right on every challenge of the
+// other. So the whole ground truth is built by running tests, and a bench four
+// times the size costs four times the collecting and none of the reading.
+//
 // Cut those out and lay them beside the prompt and the answer reads itself.
 // The same subtraction is the only honest measure of how well segmentation is
 // doing: match each icon to the candidate whose box overlaps it and count the
