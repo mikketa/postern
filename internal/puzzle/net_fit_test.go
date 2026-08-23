@@ -29,13 +29,21 @@ type netFold struct {
 }
 
 // synthGroup traces one glyph and a handful of others into a group shaped like
-// a real one: one pictogram, its tracing among tracings of other glyphs. The
-// distractors are traced too, so the network cannot win by noticing which
-// candidate was drawn by hand rather than which one is the right shape.
-func synthGroup(folds []netFold, i int, distractors int, rng *rand.Rand) netGroup {
+// a real one: one pictogram, its tracing among tracings of other glyphs and
+// pieces of scenery. The glyph distractors are traced too, so the network
+// cannot win by noticing which candidate was drawn by hand rather than which
+// one is the right shape; the scenery is there because half of what the
+// segmenter really hands over is not a drawing at all, and a network that has
+// never been shown a window frame has no reason to rank one last. See
+// scenery_test.go.
+func synthGroup(folds []netFold, i int, distractors int, junk [][]float64, rng *rand.Rand) netGroup {
 	g := netGroup{Want: folds[i].want, Answer: 0}
 	g.Got = append(g.Got, polarMap(traceGlyph(folds[i].glyph, rng)))
-	for range distractors {
+	for k := range distractors {
+		if len(junk) > 0 && k%2 == 1 {
+			g.Got = append(g.Got, junk[rng.IntN(len(junk))])
+			continue
+		}
 		j := rng.IntN(len(folds))
 		for j == i {
 			j = rng.IntN(len(folds))
@@ -129,7 +137,7 @@ func netScores(n *Net, wanted, found []Shape) [][]float64 {
 }
 
 // fitNet trains a network on tracings synthesised fresh every epoch.
-func fitNet(t *testing.T, folds []netFold, epochs int, rate, decay float64) *Net {
+func fitNet(t *testing.T, folds []netFold, junk [][]float64, epochs int, rate, decay float64) *Net {
 	const batch, distractors = 32, 4
 
 	n := NewNet(7)
@@ -149,7 +157,7 @@ func fitNet(t *testing.T, folds []netFold, epochs int, rate, decay float64) *Net
 			end := min(s+batch, len(order))
 			b := make([]netGroup, 0, end-s)
 			for _, i := range order[s:end] {
-				b = append(b, synthGroup(folds, i, distractors, rng))
+				b = append(b, synthGroup(folds, i, distractors, junk, rng))
 			}
 			l, r := batchGrads(n, b, grads)
 			loss += l
@@ -202,7 +210,13 @@ func TestANetworkFittedOnSynthesisedTracingsOnly(t *testing.T) {
 	}
 	labels := readLabels(t, labelPath)
 
-	n := fitNet(t, folds, envInt("NET_EPOCHS", 40),
+	var junk [][]float64
+	for _, s := range sceneryIfAny(t) {
+		junk = append(junk, polarMap(s))
+	}
+	t.Logf("%d glyphes, %d pieces de decor", len(folds), len(junk))
+
+	n := fitNet(t, folds, junk, envInt("NET_EPOCHS", 40),
 		envFloat("NET_RATE", 0.05), envFloat("NET_DECAY", 1e-4))
 
 	// Every real group the network never saw.

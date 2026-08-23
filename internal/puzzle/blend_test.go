@@ -162,7 +162,12 @@ func TestTheNetworkAndTheVectorTogether(t *testing.T) {
 	}
 	labels := readLabels(t, labelPath)
 
-	n := fitNet(t, folds, envInt("NET_EPOCHS", 200),
+	junkShapes := sceneryIfAny(t)
+	var junk [][]float64
+	for _, s := range junkShapes {
+		junk = append(junk, polarMap(s))
+	}
+	n := fitNet(t, folds, junk, envInt("NET_EPOCHS", 200),
 		envFloat("NET_RATE", 0.05), envFloat("NET_DECAY", 1e-4))
 
 	// Synthetic groups again, this time measured both ways.
@@ -173,7 +178,11 @@ func TestTheNetworkAndTheVectorTogether(t *testing.T) {
 	for range perGlyph {
 		for i, g := range glyphs {
 			cand := []Shape{traceGlyph(g, rng)}
-			for range distractors {
+			for k := range distractors {
+				if len(junkShapes) > 0 && k%2 == 1 {
+					cand = append(cand, junkShapes[rng.IntN(len(junkShapes))])
+					continue
+				}
 				j := rng.IntN(len(glyphs))
 				for j == i {
 					j = rng.IntN(len(glyphs))
