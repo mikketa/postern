@@ -114,8 +114,11 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // on a stem, and tracings loose enough that the glyph is barely in them.
 //
 // Skipped rather than left failing: a test that always fails stops being read.
+// ICON=1 runs it anyway, which is how the number above is kept honest.
 func TestTheIconChallengeIsSolved(t *testing.T) {
-	t.Skip("solved about half the time: see the comment above")
+	if os.Getenv("ICON") == "" {
+		t.Skip("solved about half the time: see the comment above, ICON=1 to run it")
+	}
 	solves(t, "Icon CAPTCHA", SolveIcon)
 }
 
