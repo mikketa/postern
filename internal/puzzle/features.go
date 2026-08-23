@@ -42,21 +42,26 @@ import "math"
 //	the written-down rules     0.759 per pictogram, 45 whole arrangements of 59
 //	with the network as well   0.764 per pictogram, 47 whole arrangements of 59
 //
-// Note how little the arrangement moves for how much the pictogram does, and
-// how little the last row adds. Both have the same cause, and it is worth
-// being plain about it.
-//
-// A challenge is largely readable or it is not: its three pictograms fail
+// Note how little the arrangement moves for how much the pictogram does: a
+// challenge is largely readable or it is not, its three pictograms fail
 // together, so ranking each one better does not settle proportionally more
-// challenges. And the network — a fitted description rather than a written
-// rule, see net.go — was worth 0.082 per pictogram when it arrived and is
-// worth 0.005 now. What changed in between was not the network but what the
-// rules were fitted against: tracings drawn at the size a real icon is rather
-// than twice it, and scenery among the distractors rather than only other
-// glyphs. On the wrong training data the network was making up for a fit that
-// had been handicapped; on the right data the written rules very nearly reach
-// it alone. It is kept because two whole arrangements is two, and because it
-// costs one embedding per shape — but it is not what it looked like.
+// challenges.
+//
+// The last row understates the network, and the way it does is worth keeping.
+// Ranked against stored labels, over the challenges whose icons were all found
+// anyway, it looks like two arrangements in fifty-nine. Measured end to end
+// against reconstructed truth — bench_test.go, the only measurement here that
+// predicts the live one — the same question comes out at 41 challenges of 90
+// without it and 47 with. The narrower measurement was answering a narrower
+// question, on candidates chosen when the segmentation had already succeeded,
+// and flattered the rules by never showing them the cases they lose.
+//
+// What did change the rules' own worth, from 0.686 per pictogram to 0.759, was
+// not a measurement at all but what they were fitted against: tracings drawn
+// at the size a real icon is rather than twice it, and scenery among the
+// distractors rather than only other glyphs. Both were wrong for as long as
+// the synthesiser existed, and correcting them was worth more than any column
+// added to the vector.
 //
 // Eight rings is where the rings stop paying — twelve and sixteen are no
 // better — and four other ideas were tried against the same bench and dropped

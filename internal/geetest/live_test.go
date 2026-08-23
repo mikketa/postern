@@ -97,16 +97,18 @@ func TestTheSliderChallengeIsSolved(t *testing.T) {
 // eleven useless ones beats the useful column. What it needed was measurements
 // of a different kind: the rotation sweep reflected as well as turned, the
 // agreement sliced into rings out from the centre rather than totalled, and a
-// learnt description of the shape to sit beside the written-down ones.
+// learnt description of the shape to sit beside the written-down ones — a
+// small convolution over a log-polar map of the silhouette, fitted to
+// synthesised tracings, worth 41 challenges of 90 against 47.
 //
 // What it needed more, in the end, was to be fitted against the right thing.
 // It is fitted on tracings synthesised from the vendor's own prompts, and
 // those were being drawn at twice the size a real icon is, among distractors
 // that were all other pictograms — while what the segmenter really hands over
 // is three icons among a handful of window frames and kerbstones. Drawing them
-// at the right size and putting scenery among the distractors is worth more
-// than everything else here put together: 0.686 of pictograms ranked right
-// before, 0.759 after, and 39 whole arrangements of 59 against 45.
+// at the right size and putting scenery among the distractors took the
+// written-down rules from 0.686 of pictograms ranked right to 0.759, which is
+// more than any column ever added to them.
 //
 // The whole chain, measured against reconstructed ground truth rather than
 // inferred — see internal/puzzle/bench_test.go, which is the only measurement
