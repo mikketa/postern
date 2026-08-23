@@ -38,16 +38,26 @@ import "math"
 // cross-validated by challenge:
 //
 //	silhouette overlap alone   0.664 per pictogram, 36 whole arrangements of 59
-//	the fitted model           0.679 per pictogram, 43 whole arrangements of 59
+//	the written-down rules     0.686 per pictogram, 39 whole arrangements of 59
+//	the network alone          0.732 per pictogram, 37 whole arrangements of 59
+//	the two together           0.768 per pictogram, 43 whole arrangements of 59
 //
-// The gap is small per pictogram and large per challenge, which is the point:
-// a challenge needs all three right, so a rule that is a little better on each
-// one is a good deal better on the whole. Eight rings is where this stops
-// paying — twelve and sixteen are no better — and three other ideas were tried
-// against the same bench and dropped for moving nothing: wedges around the
-// centre as well as rings, the shape of the match across the whole sweep
-// rather than at its best angle, and sweeping a range of scales as well as
-// angles, which was worse.
+// The last row is why the network is here. It is not that it is better — it
+// settles fewer whole challenges on its own than the rules do — but that it is
+// wrong about different pictures, and adding a measurement only ever helps for
+// that reason. Note also how little the arrangement moves for how much the
+// pictogram does: a challenge is largely readable or it is not, and the three
+// pictograms of one challenge fail together.
+//
+// Eight rings is where the rings stop paying — twelve and sixteen are no
+// better — and four other ideas were tried against the same bench and dropped
+// for moving nothing: wedges around the centre as well as rings, the shape of
+// the match across the whole sweep rather than at its best angle, sweeping a
+// range of scales as well as angles, which was worse, and taking the better of
+// the network's two scores with the candidate reflected, which is worth 0.741
+// against 0.732 — two pictograms in 220, well inside what this bench can
+// resolve. The network learns to see through a reflection on its own, having
+// been fitted on tracings half of which are mirrored.
 
 // FeatureCount is the length of a comparison vector.
 const FeatureCount = 24
