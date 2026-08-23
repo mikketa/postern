@@ -438,9 +438,26 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 	cost := make([][]float64, len(wanted))
 	for i := range wanted {
 		cost[i] = make([]float64, len(found))
+		z := make([]float64, len(found))
+		top := math.Inf(-1)
 		for j := range found {
+			z[j] = m.dot(Features(wanted[i], found[j], found))
+			top = math.Max(top, z[j])
+		}
+		// Normalised within the pictogram before the arrangements are
+		// compared. The model is fitted to order one pictogram's candidates
+		// against each other and nothing more, so its scores carry no scale
+		// that survives being added across pictograms: one pictogram whose
+		// candidates all score high would otherwise decide the arrangement on
+		// its own. What does add up is how much of a pictogram's own
+		// probability a candidate takes.
+		sum := 0.0
+		for j := range z {
+			sum += math.Exp(z[j] - top)
+		}
+		for j := range z {
 			// Negated: the search below minimises.
-			cost[i][j] = -m.dot(Features(wanted[i], found[j], found))
+			cost[i][j] = -(z[j] - top - math.Log(sum))
 		}
 	}
 
@@ -483,15 +500,11 @@ func pairWith(m Model, wanted, found []Shape) (Pairing, error) {
 	// to order the candidates of one pictogram, so only the share of the score
 	// that the chosen candidate takes among them means anything. Its raw score
 	// has no scale of its own.
+	// The costs are already negative log probabilities within their pictogram,
+	// so the confidence is what they exponentiate back to.
 	var mean float64
 	for i, j := range best {
-		var sum float64
-		for k := range found {
-			sum += math.Exp(-cost[i][k] + cost[i][j])
-		}
-		if sum > 0 {
-			mean += 1 / sum
-		}
+		mean += math.Exp(-cost[i][j])
 	}
 	mean /= float64(len(best))
 
